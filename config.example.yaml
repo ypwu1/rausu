@@ -1,0 +1,21 @@
+# config.example.yaml — Rausu LLM API Gateway configuration example
+server:
+  host: 0.0.0.0
+  port: 4000
+
+logging:
+  level: info
+  format: json   # json | pretty
+
+models:
+  - name: gpt-4o
+    providers:
+      - provider: openai
+        model: gpt-4o
+        api_key: "${OPENAI_API_KEY}"
+
+  - name: claude-sonnet
+    providers:
+      - provider: anthropic
+        model: claude-sonnet-4-20250514
+        api_key: "${ANTHROPIC_API_KEY}"
