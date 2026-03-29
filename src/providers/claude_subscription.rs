@@ -4,6 +4,47 @@
 //! using an [`OAuthTokenManager`] for automatic token refresh.
 //!
 //! Uses the same Anthropic Messages API format as the `anthropic` provider.
+//!
+//! # OAuth Authentication Requirements
+//!
+//! Anthropic's API requires OAuth requests to identify as Claude Code clients.
+//! This was reverse-engineered from the following sources:
+//!
+//! - **OpenClaw** (<https://github.com/openclaw/openclaw>)
+//!   `dist/auth-profiles-DRjqKE3G.js` lines 100480-100504:
+//!   Defines `PI_AI_OAUTH_ANTHROPIC_BETAS` and `isAnthropicOAuthApiKey()`.
+//!
+//! - **pi-ai** (`@mariozechner/pi-ai`)
+//!   `dist/providers/anthropic.js`, function `createClient()`:
+//!   OAuth branch sets `authToken` (Bearer auth), beta headers, user-agent,
+//!   x-app header, and injects Claude Code identity into system prompt.
+//!
+//! Required headers for OAuth:
+//!   - `anthropic-beta: claude-code-20250219,oauth-2025-04-20,...`
+//!   - `user-agent: claude-cli/<version>`
+//!   - `x-app: cli`
+//!
+//! Required system prompt prefix:
+//!   `"You are Claude Code, Anthropic's official CLI for Claude."`
+//!
+//! OAuth token format: `sk-ant-oat*`
+//!
+//! # Verified Models (Claude Pro subscription, tested 2026-03-30)
+//!
+//! | Model ID                        | Status |
+//! |---------------------------------|--------|
+//! | `claude-opus-4-6`               | ✅     |
+//! | `claude-sonnet-4-6`             | ✅     |
+//! | `claude-opus-4-5-20251101`      | ✅     |
+//! | `claude-sonnet-4-5-20250929`    | ✅     |
+//! | `claude-opus-4-1-20250805`      | ✅     |
+//! | `claude-opus-4-20250514`        | ✅     |
+//! | `claude-sonnet-4-20250514`      | ✅     |
+//! | `claude-haiku-4-5-20251001`     | ✅     |
+//! | `claude-3-haiku-20240307`       | ✅     |
+//!
+//! Note: 4.6 models use short IDs without date suffix.
+//! Older models (3.5-sonnet, 3.7-sonnet) return `not_found_error`.
 
 // Deserialization structs mirror the Anthropic API wire format exactly.
 // Fields are read by serde even when not directly accessed in Rust code.
