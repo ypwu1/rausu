@@ -13,8 +13,16 @@ use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
 use tracing::info;
 
+use std::path::PathBuf;
+
+use crate::auth::oauth::{OAuthTokenManager, TokenSource};
 use crate::config::AppConfig;
-use crate::providers::{anthropic::AnthropicProvider, openai::OpenAiProvider, Provider};
+use crate::providers::{
+    anthropic::AnthropicProvider,
+    claude_subscription::ClaudeSubscriptionProvider,
+    openai::OpenAiProvider,
+    Provider,
+};
 use crate::schema::chat::ModelInfo;
 
 pub mod routes;
@@ -90,6 +98,8 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
     // Collect model names per provider type
     let mut openai_models: Vec<(String, String, String)> = Vec::new(); // (virtual, api_key, model)
     let mut anthropic_models: Vec<(String, String, String)> = Vec::new();
+    // (virtual_name, provider_model, token_source_str, credentials_path)
+    let mut claude_sub_models: Vec<(String, String, String, Option<String>)> = Vec::new();
 
     for model_cfg in &config.models {
         for deployment in &model_cfg.providers {
@@ -112,6 +122,19 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
                     model_registry.push((
                         model_cfg.name.clone(),
                         "anthropic".to_string(),
+                        deployment.model.clone(),
+                    ));
+                }
+                "claude-subscription" => {
+                    claude_sub_models.push((
+                        model_cfg.name.clone(),
+                        deployment.model.clone(),
+                        deployment.token_source.clone().unwrap_or_default(),
+                        deployment.credentials_path.clone(),
+                    ));
+                    model_registry.push((
+                        model_cfg.name.clone(),
+                        "claude-subscription".to_string(),
                         deployment.model.clone(),
                     ));
                 }
@@ -154,6 +177,38 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
 
         for (api_key, model_names) in by_key {
             providers.push(Box::new(AnthropicProvider::new(api_key, model_names)));
+        }
+    }
+
+    // Create one ClaudeSubscriptionProvider per unique (token_source, credentials_path) pair.
+    if !claude_sub_models.is_empty() {
+        // Key: (token_source_str, credentials_path_str)
+        let mut by_source: std::collections::HashMap<(String, String), Vec<String>> =
+            std::collections::HashMap::new();
+        for (virtual_name, _model, token_source_str, credentials_path) in &claude_sub_models {
+            let path_key = credentials_path.clone().unwrap_or_default();
+            by_source
+                .entry((token_source_str.clone(), path_key))
+                .or_default()
+                .push(virtual_name.clone());
+        }
+
+        for ((token_source_str, credentials_path_str), model_names) in by_source {
+            let token_source = match token_source_str.as_str() {
+                "env" => TokenSource::Env,
+                "credentials_file" => TokenSource::CredentialsFile,
+                _ => TokenSource::Auto,
+            };
+            let credentials_path = if credentials_path_str.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(&credentials_path_str))
+            };
+            let token_manager = OAuthTokenManager::new(token_source, credentials_path);
+            providers.push(Box::new(ClaudeSubscriptionProvider::new(
+                token_manager,
+                model_names,
+            )));
         }
     }
 

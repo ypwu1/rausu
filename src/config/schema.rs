@@ -67,14 +67,18 @@ pub struct ModelConfig {
 /// A single provider deployment for a model.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProviderDeployment {
-    /// Provider type: openai | anthropic.
+    /// Provider type: openai | anthropic | claude-subscription.
     pub provider: String,
     /// The model name on the provider side.
     pub model: String,
     /// API key (supports `${ENV_VAR}` interpolation).
     pub api_key: Option<String>,
-    /// Optional base URL override.
+    /// Optional base URL override (OpenAI-compatible providers only).
     pub base_url: Option<String>,
+    /// Token source for `claude-subscription`: `env` | `credentials_file` | `auto` (default).
+    pub token_source: Option<String>,
+    /// Custom path to the Claude credentials file (overrides default `~/.claude/.credentials.json`).
+    pub credentials_path: Option<String>,
 }
 
 impl AppConfig {

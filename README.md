@@ -7,7 +7,7 @@ A high-performance LLM API Gateway written in Rust — a drop-in replacement for
 ## Features
 
 - **OpenAI-compatible API** — works with any OpenAI SDK client
-- **Multi-provider** — supports OpenAI and Anthropic (Phase 1); more providers coming in later phases
+- **Multi-provider** — supports OpenAI, Anthropic (API key), and Claude Subscription (OAuth)
 - **Streaming** — full SSE streaming support
 - **Single binary** — zero runtime dependencies
 - **YAML configuration** — with environment variable interpolation
@@ -59,7 +59,37 @@ models:
       - provider: anthropic
         model: claude-sonnet-4-20250514
         api_key: "${ANTHROPIC_API_KEY}"
+
+  # Claude Pro/Max subscription — no API key required
+  - name: claude-sonnet-sub
+    providers:
+      - provider: claude-subscription
+        model: claude-sonnet-4-20250514
+        # token_source: auto   # auto (default) | env | credentials_file
+        # credentials_path: /custom/path/.credentials.json  # optional
 ```
+
+### `claude-subscription` provider
+
+Uses your Claude Pro/Max subscription via OAuth instead of a paid API key.
+
+**Token sources (checked in priority order):**
+
+1. **`env`** — set `CLAUDE_OAUTH_TOKEN=<access_token>` (static, no refresh)
+2. **`credentials_file`** — reads `~/.claude/.credentials.json` written by the Claude CLI; supports automatic token refresh
+3. **`auto`** (default) — tries `env` first, then `credentials_file`
+
+```yaml
+models:
+  - name: claude-sonnet-sub
+    providers:
+      - provider: claude-subscription
+        model: claude-sonnet-4-20250514
+        token_source: credentials_file          # optional, default: auto
+        # credentials_path: ~/.claude/.credentials.json  # optional override
+```
+
+> **Note:** The `anthropic` and `claude-subscription` providers can coexist in the same config — they are completely independent and can serve different virtual model names.
 
 Environment variable overrides use the `RAUSU__` prefix with `__` as separator:
 

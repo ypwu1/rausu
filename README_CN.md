@@ -7,7 +7,7 @@
 ## 特性
 
 - **OpenAI 兼容 API** — 适配任何 OpenAI SDK 客户端
-- **多 Provider 支持** — Phase 1 支持 OpenAI 和 Anthropic，后续版本将增加更多 Provider
+- **多 Provider 支持** — 支持 OpenAI、Anthropic（API Key）及 Claude 订阅（OAuth）
 - **流式传输** — 完整的 SSE 流式支持
 - **单一二进制** — 零运行时依赖
 - **YAML 配置** — 支持环境变量插值
@@ -59,7 +59,37 @@ models:
       - provider: anthropic
         model: claude-sonnet-4-20250514
         api_key: "${ANTHROPIC_API_KEY}"
+
+  # Claude Pro/Max 订阅 —— 无需 API Key
+  - name: claude-sonnet-sub
+    providers:
+      - provider: claude-subscription
+        model: claude-sonnet-4-20250514
+        # token_source: auto   # auto（默认）| env | credentials_file
+        # credentials_path: /custom/path/.credentials.json  # 可选
 ```
+
+### `claude-subscription` Provider
+
+通过 OAuth 使用你的 Claude Pro/Max 订阅，无需付费 API Key。
+
+**Token 来源（按优先级顺序）：**
+
+1. **`env`** — 设置环境变量 `CLAUDE_OAUTH_TOKEN=<access_token>`（静态，不自动刷新）
+2. **`credentials_file`** — 读取 Claude CLI 写入的 `~/.claude/.credentials.json`，支持自动刷新 Token
+3. **`auto`**（默认）—— 先尝试 `env`，再尝试 `credentials_file`
+
+```yaml
+models:
+  - name: claude-sonnet-sub
+    providers:
+      - provider: claude-subscription
+        model: claude-sonnet-4-20250514
+        token_source: credentials_file          # 可选，默认：auto
+        # credentials_path: ~/.claude/.credentials.json  # 可选路径覆盖
+```
+
+> **注意：** `anthropic` 和 `claude-subscription` 是完全独立的 Provider，可以在同一配置文件中共存，分别服务不同的虚拟模型名称。
 
 环境变量覆盖使用 `RAUSU__` 前缀，以 `__` 为分隔符：
 

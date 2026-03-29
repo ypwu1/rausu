@@ -7,6 +7,7 @@ use anyhow::Result;
 use clap::Parser;
 use tracing::info;
 
+mod auth;
 mod config;
 mod providers;
 mod schema;
