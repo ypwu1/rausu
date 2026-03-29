@@ -31,7 +31,9 @@ use super::{Provider, ProviderError};
 
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
-const OAUTH_BETA: &str = "oauth-2025-04-20";
+const OAUTH_BETAS: &str = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14";
+const CLAUDE_CODE_USER_AGENT: &str = "claude-cli/2.1.75";
+const CLAUDE_CODE_IDENTITY: &str = "You are Claude Code, Anthropic's official CLI for Claude.";
 const DEFAULT_MAX_TOKENS: u32 = 4096;
 
 // ── Provider struct ───────────────────────────────────────────────────────────
@@ -237,6 +239,12 @@ fn translate_request(req: &ChatCompletionRequest) -> AnthropicRequest {
             .collect()
     });
 
+    // Prepend Claude Code identity to system prompt (required for OAuth)
+    let system = match system {
+        Some(s) => Some(format!("{}\n\n{}", CLAUDE_CODE_IDENTITY, s)),
+        None => Some(CLAUDE_CODE_IDENTITY.to_string()),
+    };
+
     AnthropicRequest {
         model: req.model.clone(),
         messages,
@@ -435,7 +443,9 @@ impl Provider for ClaudeSubscriptionProvider {
             .post(ANTHROPIC_API_URL)
             .header("Authorization", format!("Bearer {}", token))
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("anthropic-beta", OAUTH_BETA)
+            .header("anthropic-beta", OAUTH_BETAS)
+            .header("user-agent", CLAUDE_CODE_USER_AGENT)
+            .header("x-app", "cli")
             .header("content-type", "application/json")
             .json(&anthropic_req)
             .send()
@@ -473,7 +483,9 @@ impl Provider for ClaudeSubscriptionProvider {
             .post(ANTHROPIC_API_URL)
             .header("Authorization", format!("Bearer {}", token))
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("anthropic-beta", OAUTH_BETA)
+            .header("anthropic-beta", OAUTH_BETAS)
+            .header("user-agent", CLAUDE_CODE_USER_AGENT)
+            .header("x-app", "cli")
             .header("content-type", "application/json")
             .json(&anthropic_req)
             .send()
@@ -590,7 +602,8 @@ mod tests {
         ];
         let req = make_request(messages, "claude-sonnet-4-20250514");
         let anthropic_req = translate_request(&req);
-        assert_eq!(anthropic_req.system, Some("You are helpful.".to_string()));
+        let expected_system = format!("{}\n\nYou are helpful.", CLAUDE_CODE_IDENTITY);
+        assert_eq!(anthropic_req.system, Some(expected_system));
         assert_eq!(anthropic_req.messages.len(), 1);
         assert_eq!(anthropic_req.messages[0].role, "user");
     }
