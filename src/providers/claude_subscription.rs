@@ -31,6 +31,7 @@ use super::{Provider, ProviderError};
 
 const ANTHROPIC_API_URL: &str = "https://api.anthropic.com/v1/messages";
 const ANTHROPIC_VERSION: &str = "2023-06-01";
+const OAUTH_BETA: &str = "oauth-2025-04-20";
 const DEFAULT_MAX_TOKENS: u32 = 4096;
 
 // ── Provider struct ───────────────────────────────────────────────────────────
@@ -434,6 +435,7 @@ impl Provider for ClaudeSubscriptionProvider {
             .post(ANTHROPIC_API_URL)
             .header("Authorization", format!("Bearer {}", token))
             .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("anthropic-beta", OAUTH_BETA)
             .header("content-type", "application/json")
             .json(&anthropic_req)
             .send()
@@ -471,6 +473,7 @@ impl Provider for ClaudeSubscriptionProvider {
             .post(ANTHROPIC_API_URL)
             .header("Authorization", format!("Bearer {}", token))
             .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("anthropic-beta", OAUTH_BETA)
             .header("content-type", "application/json")
             .json(&anthropic_req)
             .send()
