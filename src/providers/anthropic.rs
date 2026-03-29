@@ -373,6 +373,27 @@ impl Provider for AnthropicProvider {
             })
             .collect()
     }
+
+    async fn proxy_messages(
+        &self,
+        body: serde_json::Value,
+        _is_stream: bool,
+    ) -> Result<reqwest::Response, super::ProviderError> {
+        debug!(
+            model = %body.get("model").and_then(|v| v.as_str()).unwrap_or("unknown"),
+            "Forwarding Messages API request via anthropic"
+        );
+        let response = self
+            .client
+            .post(ANTHROPIC_API_URL)
+            .header("x-api-key", &self.api_key)
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+        Ok(response)
+    }
 }
 
 /// Translate an Anthropic non-streaming response to OpenAI format.

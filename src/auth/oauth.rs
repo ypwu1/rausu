@@ -254,9 +254,9 @@ impl OAuthTokenManager {
             .await
             .context("Failed to parse token refresh response")?;
 
-        let expires_at_ms = token_resp.expires_in.map(|secs| {
-            chrono::Utc::now().timestamp_millis() + secs * 1000
-        });
+        let expires_at_ms = token_resp
+            .expires_in
+            .map(|secs| chrono::Utc::now().timestamp_millis() + secs * 1000);
 
         Ok(OAuthToken {
             access_token: token_resp.access_token,
@@ -277,10 +277,7 @@ impl OAuthTokenManager {
             .context("Failed to fetch OAuth metadata")?;
 
         if !response.status().is_success() {
-            anyhow::bail!(
-                "OAuth metadata fetch returned {}",
-                response.status()
-            );
+            anyhow::bail!("OAuth metadata fetch returned {}", response.status());
         }
 
         response

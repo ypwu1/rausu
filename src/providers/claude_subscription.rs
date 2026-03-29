@@ -239,7 +239,11 @@ fn translate_request(req: &ChatCompletionRequest) -> AnthropicRequest {
                         .filter_map(|p| p.get("text").and_then(Value::as_str))
                         .collect::<Vec<_>>()
                         .join("\n");
-                    if text.is_empty() { None } else { Some(text) }
+                    if text.is_empty() {
+                        None
+                    } else {
+                        Some(text)
+                    }
                 }
                 _ => None,
             };
@@ -496,7 +500,10 @@ impl Provider for ClaudeSubscriptionProvider {
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
             error!(status = status, body = %body, "claude-subscription error response");
-            return Err(ProviderError::ProviderResponse { status, message: body });
+            return Err(ProviderError::ProviderResponse {
+                status,
+                message: body,
+            });
         }
 
         let anthropic_resp: AnthropicResponse = response.json().await?;
@@ -536,7 +543,10 @@ impl Provider for ClaudeSubscriptionProvider {
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
             error!(status = status, body = %body, "claude-subscription streaming error response");
-            return Err(ProviderError::ProviderResponse { status, message: body });
+            return Err(ProviderError::ProviderResponse {
+                status,
+                message: body,
+            });
         }
 
         let model = req.model.clone();
@@ -572,6 +582,36 @@ impl Provider for ClaudeSubscriptionProvider {
             })
             .collect()
     }
+
+    async fn proxy_messages(
+        &self,
+        body: serde_json::Value,
+        _is_stream: bool,
+    ) -> Result<reqwest::Response, super::ProviderError> {
+        let token = self
+            .token_manager
+            .get_token()
+            .await
+            .map_err(|e| super::ProviderError::Internal(e.to_string()))?;
+
+        debug!(
+            model = %body.get("model").and_then(|v| v.as_str()).unwrap_or("unknown"),
+            "Forwarding Messages API request via claude-subscription"
+        );
+        let response = self
+            .client
+            .post(ANTHROPIC_API_URL)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("anthropic-version", ANTHROPIC_VERSION)
+            .header("anthropic-beta", OAUTH_BETAS)
+            .header("user-agent", CLAUDE_CODE_USER_AGENT)
+            .header("x-app", "cli")
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+        Ok(response)
+    }
 }
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
@@ -606,17 +646,16 @@ mod tests {
     #[test]
     fn test_provider_name() {
         let manager = OAuthTokenManager::new(TokenSource::Auto, None);
-        let provider = ClaudeSubscriptionProvider::new(manager, vec!["claude-sonnet-4-20250514".to_string()]);
+        let provider =
+            ClaudeSubscriptionProvider::new(manager, vec!["claude-sonnet-4-20250514".to_string()]);
         assert_eq!(provider.name(), "claude-subscription");
     }
 
     #[test]
     fn test_models_owned_by() {
         let manager = OAuthTokenManager::new(TokenSource::Auto, None);
-        let provider = ClaudeSubscriptionProvider::new(
-            manager,
-            vec!["claude-sonnet-4-20250514".to_string()],
-        );
+        let provider =
+            ClaudeSubscriptionProvider::new(manager, vec!["claude-sonnet-4-20250514".to_string()]);
         let models = provider.models();
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "claude-sonnet-4-20250514");
@@ -666,8 +705,14 @@ mod tests {
     #[test]
     fn test_map_stop_reason() {
         assert_eq!(map_stop_reason(Some("end_turn")), Some("stop".to_string()));
-        assert_eq!(map_stop_reason(Some("max_tokens")), Some("length".to_string()));
-        assert_eq!(map_stop_reason(Some("tool_use")), Some("tool_calls".to_string()));
+        assert_eq!(
+            map_stop_reason(Some("max_tokens")),
+            Some("length".to_string())
+        );
+        assert_eq!(
+            map_stop_reason(Some("tool_use")),
+            Some("tool_calls".to_string())
+        );
         assert_eq!(map_stop_reason(None), None);
     }
 
@@ -688,7 +733,10 @@ mod tests {
         };
         let openai_resp = translate_response(resp, "claude-sonnet-4-20250514");
         assert!(openai_resp.id.starts_with("chatcmpl-"));
-        assert_eq!(openai_resp.choices[0].finish_reason, Some("stop".to_string()));
+        assert_eq!(
+            openai_resp.choices[0].finish_reason,
+            Some("stop".to_string())
+        );
         assert_eq!(openai_resp.usage.total_tokens, 15);
     }
 }

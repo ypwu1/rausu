@@ -134,10 +134,7 @@ pub struct ChatGptOAuthTokenManager {
 
 impl ChatGptOAuthTokenManager {
     /// Create a new token manager wrapped in an `Arc`.
-    pub fn new(
-        token_source: ChatGptTokenSource,
-        credentials_path: Option<PathBuf>,
-    ) -> Arc<Self> {
+    pub fn new(token_source: ChatGptTokenSource, credentials_path: Option<PathBuf>) -> Arc<Self> {
         Arc::new(Self {
             client: Client::new(),
             token_source,
@@ -226,8 +223,12 @@ impl ChatGptOAuthTokenManager {
         let path = self
             .credentials_path()
             .context("Could not determine chatgpt credentials file path")?;
-        let contents = std::fs::read_to_string(&path)
-            .with_context(|| format!("Failed to read chatgpt credentials file: {}", path.display()))?;
+        let contents = std::fs::read_to_string(&path).with_context(|| {
+            format!(
+                "Failed to read chatgpt credentials file: {}",
+                path.display()
+            )
+        })?;
         let creds: CredentialsFile =
             serde_json::from_str(&contents).context("Failed to parse chatgpt credentials file")?;
         let account_id = creds
@@ -311,8 +312,8 @@ mod tests {
                 "chatgpt_account_id": "acc_test123"
             }
         });
-        let encoded = base64::engine::general_purpose::URL_SAFE_NO_PAD
-            .encode(payload.to_string().as_bytes());
+        let encoded =
+            base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(payload.to_string().as_bytes());
         format!("header.{}.sig", encoded)
     }
 

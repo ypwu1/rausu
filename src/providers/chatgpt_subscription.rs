@@ -185,9 +185,7 @@ enum ResponsesEvent {
     },
     /// Response completed — includes usage.
     #[serde(rename = "response.completed")]
-    Completed {
-        response: ResponsesCompletedPayload,
-    },
+    Completed { response: ResponsesCompletedPayload },
     /// Response done (alias for completed without usage).
     #[serde(rename = "response.done")]
     Done {
@@ -259,7 +257,11 @@ fn translate_request(req: &ChatCompletionRequest) -> ResponsesRequest {
                             .filter_map(|p| p.get("text").and_then(Value::as_str))
                             .collect::<Vec<_>>()
                             .join("\n");
-                        if text.is_empty() { None } else { Some(text) }
+                        if text.is_empty() {
+                            None
+                        } else {
+                            Some(text)
+                        }
                     }
                     _ => None,
                 };
@@ -341,8 +343,7 @@ fn parse_responses_sse_chunk(
                 }
                 match serde_json::from_str::<ResponsesEvent>(&data) {
                     Ok(event) => {
-                        let chunks =
-                            responses_event_to_openai_chunks(event, id, model, created);
+                        let chunks = responses_event_to_openai_chunks(event, id, model, created);
                         results.extend(chunks);
                     }
                     Err(_) => {
@@ -412,12 +413,7 @@ fn responses_event_to_openai_chunks(
                     delta: Delta {
                         role: None,
                         content: None,
-                        tool_calls: Some(
-                            tool_call_delta
-                                .as_array()
-                                .cloned()
-                                .unwrap_or_default(),
-                        ),
+                        tool_calls: Some(tool_call_delta.as_array().cloned().unwrap_or_default()),
                     },
                     finish_reason: None,
                 }],
@@ -437,7 +433,10 @@ fn responses_event_to_openai_chunks(
                 }],
             })]
         }
-        ResponsesEvent::Completed { response } | ResponsesEvent::Done { response: Some(response) } => {
+        ResponsesEvent::Completed { response }
+        | ResponsesEvent::Done {
+            response: Some(response),
+        } => {
             // Emit a stop chunk.
             let mut chunk = ChatCompletionChunk {
                 id: response.id.unwrap_or_else(|| id.to_string()),
@@ -479,9 +478,8 @@ fn responses_event_to_openai_chunks(
             })]
         }
         ResponsesEvent::Error { code, message } => {
-            let msg = message.unwrap_or_else(|| {
-                code.unwrap_or_else(|| "unknown error".to_string())
-            });
+            let msg =
+                message.unwrap_or_else(|| code.unwrap_or_else(|| "unknown error".to_string()));
             vec![Err(ProviderError::ProviderResponse {
                 status: 500,
                 message: msg,
@@ -552,10 +550,7 @@ impl Provider for ChatGptSubscriptionProvider {
     ) -> Result<ChatCompletionResponse, ProviderError> {
         // Always stream internally; aggregate on behalf of the non-streaming caller.
         let stream = self.chat_completions_stream(req.clone()).await?;
-        let chunks: Vec<_> = stream
-            .filter_map(|r| async move { r.ok() })
-            .collect()
-            .await;
+        let chunks: Vec<_> = stream.filter_map(|r| async move { r.ok() }).collect().await;
 
         let completion_id = new_completion_id();
         let created = Utc::now().timestamp();
@@ -602,7 +597,10 @@ impl Provider for ChatGptSubscriptionProvider {
         if !response.status().is_success() {
             let body = response.text().await.unwrap_or_default();
             error!(status = status, body = %body, "chatgpt-subscription error response");
-            return Err(ProviderError::ProviderResponse { status, message: body });
+            return Err(ProviderError::ProviderResponse {
+                status,
+                message: body,
+            });
         }
 
         let model = req.model.clone();
@@ -679,8 +677,10 @@ mod tests {
     #[test]
     fn test_models_owned_by() {
         let manager = ChatGptOAuthTokenManager::new(ChatGptTokenSource::Auto, None);
-        let provider =
-            ChatGptSubscriptionProvider::new(manager, vec!["gpt-5.4".to_string(), "gpt-5.4-pro".to_string()]);
+        let provider = ChatGptSubscriptionProvider::new(
+            manager,
+            vec!["gpt-5.4".to_string(), "gpt-5.4-pro".to_string()],
+        );
         let models = provider.models();
         assert_eq!(models.len(), 2);
         assert_eq!(models[0].id, "gpt-5.4");
@@ -878,7 +878,10 @@ mod tests {
             },
         ];
         let resp = aggregate_stream_to_response(chunks, "gpt-5.4", "chatcmpl-a", created);
-        assert_eq!(resp.choices[0].message.content, Some(Value::String("Hello".to_string())));
+        assert_eq!(
+            resp.choices[0].message.content,
+            Some(Value::String("Hello".to_string()))
+        );
         assert_eq!(resp.choices[0].finish_reason.as_deref(), Some("stop"));
     }
 

@@ -81,4 +81,19 @@ pub trait Provider: Send + Sync {
 
     /// List the models available from this provider.
     fn models(&self) -> Vec<ModelInfo>;
+
+    /// Forward a raw Anthropic Messages API request and return the upstream response.
+    ///
+    /// Only `anthropic` and `claude-subscription` providers override this.
+    /// All others return [`ProviderError::Unsupported`] by default.
+    async fn proxy_messages(
+        &self,
+        _body: serde_json::Value,
+        _is_stream: bool,
+    ) -> Result<reqwest::Response, ProviderError> {
+        Err(ProviderError::Unsupported(format!(
+            "Provider '{}' does not support the Anthropic Messages API",
+            self.name()
+        )))
+    }
 }

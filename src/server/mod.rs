@@ -19,17 +19,16 @@ use crate::auth::chatgpt_oauth::{ChatGptOAuthTokenManager, ChatGptTokenSource};
 use crate::auth::oauth::{OAuthTokenManager, TokenSource};
 use crate::config::AppConfig;
 use crate::providers::{
-    anthropic::AnthropicProvider,
-    chatgpt_subscription::ChatGptSubscriptionProvider,
-    claude_subscription::ClaudeSubscriptionProvider,
-    openai::OpenAiProvider,
-    Provider,
+    anthropic::AnthropicProvider, chatgpt_subscription::ChatGptSubscriptionProvider,
+    claude_subscription::ClaudeSubscriptionProvider, openai::OpenAiProvider, Provider,
 };
 use crate::schema::chat::ModelInfo;
 
 pub mod routes;
 
-use routes::{chat::chat_completions, health::health_check, models::list_models};
+use routes::{
+    chat::chat_completions, health::health_check, messages::messages, models::list_models,
+};
 
 /// Shared application state passed to all route handlers.
 #[derive(Clone)]
@@ -69,6 +68,7 @@ impl Server {
             .route("/health", get(health_check))
             .route("/v1/models", get(list_models))
             .route("/v1/chat/completions", post(chat_completions))
+            .route("/v1/messages", post(messages))
             .layer(cors)
             .with_state(state);
 
@@ -252,8 +252,7 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
             } else {
                 Some(PathBuf::from(&credentials_path_str))
             };
-            let token_manager =
-                ChatGptOAuthTokenManager::new(token_source, credentials_path);
+            let token_manager = ChatGptOAuthTokenManager::new(token_source, credentials_path);
             providers.push(Box::new(ChatGptSubscriptionProvider::new(
                 token_manager,
                 model_names,

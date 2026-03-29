@@ -50,10 +50,39 @@ jobs:
           components: rustfmt
       - run: cargo fmt --all -- --check
 
+  audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+      - run: cargo audit
+
+  secrets:
+    name: Secrets Scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install trufflehog
+        run: |
+          curl -sSfL https://raw.githubusercontent.com/trufflesecurity/trufflehog/main/scripts/install.sh | sh -s -- -b /usr/local/bin
+      - name: Scan for secrets
+        run: |
+          trufflehog filesystem . \
+            --no-update \
+            --fail \
+            --only-verified \
+            --exclude-paths=<(echo -e "target/\n.git/\nCargo.lock")
+
   build:
     name: Build Release
     runs-on: ubuntu-latest
-    needs: [check, clippy, test, fmt]
+    needs: [check, clippy, test, fmt, audit]
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -65,7 +94,7 @@ jobs:
   docker:
     name: Docker Build
     runs-on: ubuntu-latest
-    needs: [check, clippy, test, fmt]
+    needs: [check, clippy, test, fmt, audit]
     steps:
       - uses: actions/checkout@v4
       - name: Build Docker image
