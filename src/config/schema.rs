@@ -67,7 +67,7 @@ pub struct ModelConfig {
 /// A single provider deployment for a model.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProviderDeployment {
-    /// Provider type: openai | anthropic | claude-subscription.
+    /// Provider type: openai | anthropic | claude-subscription | chatgpt-subscription.
     pub provider: String,
     /// The model name on the provider side.
     pub model: String,

@@ -7,7 +7,7 @@ A high-performance LLM API Gateway written in Rust — a drop-in replacement for
 ## Features
 
 - **OpenAI-compatible API** — works with any OpenAI SDK client
-- **Multi-provider** — supports OpenAI, Anthropic (API key), and Claude Subscription (OAuth)
+- **Multi-provider** — supports OpenAI, Anthropic (API key), Claude Subscription (OAuth), and ChatGPT Subscription (OAuth)
 - **Streaming** — full SSE streaming support
 - **Single binary** — zero runtime dependencies
 - **YAML configuration** — with environment variable interpolation
@@ -67,6 +67,14 @@ models:
         model: claude-sonnet-4-20250514
         # token_source: auto   # auto (default) | env | credentials_file
         # credentials_path: /custom/path/.credentials.json  # optional
+
+  # ChatGPT Plus/Pro/Max subscription — no API key required
+  - name: gpt-5
+    providers:
+      - provider: chatgpt-subscription
+        model: gpt-5.4
+        # token_source: auto   # auto (default) | env | credentials_file
+        # credentials_path: ~/.config/rausu/chatgpt-auth.json  # optional
 ```
 
 ### `claude-subscription` provider
@@ -89,7 +97,46 @@ models:
         # credentials_path: ~/.claude/.credentials.json  # optional override
 ```
 
-> **Note:** The `anthropic` and `claude-subscription` providers can coexist in the same config — they are completely independent and can serve different virtual model names.
+### `chatgpt-subscription` provider
+
+Uses your ChatGPT Plus/Pro/Max subscription via OAuth instead of a paid API key. Requests are bridged internally from Chat Completions format to the ChatGPT Responses API.
+
+**Token sources (checked in priority order):**
+
+1. **`env`** — set `CHATGPT_ACCESS_TOKEN=<access_token>` (optionally also `CHATGPT_REFRESH_TOKEN` and `CHATGPT_ACCOUNT_ID`)
+2. **`credentials_file`** — reads `~/.config/rausu/chatgpt-auth.json`; supports automatic token refresh
+3. **`auto`** (default) — tries `env` first, then `credentials_file`
+
+```yaml
+models:
+  - name: gpt-5
+    providers:
+      - provider: chatgpt-subscription
+        model: gpt-5.4
+        token_source: env              # optional, default: auto
+
+  - name: gpt-5-pro
+    providers:
+      - provider: chatgpt-subscription
+        model: gpt-5.4-pro
+        token_source: credentials_file
+        credentials_path: /custom/path/chatgpt-auth.json  # optional override
+```
+
+**Credentials file format** (`~/.config/rausu/chatgpt-auth.json`):
+
+```json
+{
+  "access_token": "eyJ...",
+  "refresh_token": "...",
+  "expires_at": 1900000000000,
+  "account_id": "acc_..."
+}
+```
+
+**Supported models:** `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`, `gpt-5.3-instant`, `gpt-5.3-chat-latest`
+
+> **Note:** All four providers (`openai`, `anthropic`, `claude-subscription`, `chatgpt-subscription`) are completely independent and can coexist in the same config, serving different virtual model names.
 
 Environment variable overrides use the `RAUSU__` prefix with `__` as separator:
 

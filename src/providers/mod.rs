@@ -13,6 +13,7 @@ use crate::schema::chat::{
 };
 
 pub mod anthropic;
+pub mod chatgpt_subscription;
 pub mod claude_subscription;
 pub mod openai;
 

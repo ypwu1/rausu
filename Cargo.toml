@@ -31,6 +31,7 @@ tower = "0.5"
 tower-http = { version = "0.6", features = ["cors", "trace"] }
 bytes = "1"
 dirs = "5"
+base64 = "0.22"
 
 [dev-dependencies]
 tokio-test = "0.4"

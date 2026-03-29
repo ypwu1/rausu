@@ -7,7 +7,7 @@
 ## 特性
 
 - **OpenAI 兼容 API** — 适配任何 OpenAI SDK 客户端
-- **多 Provider 支持** — 支持 OpenAI、Anthropic（API Key）及 Claude 订阅（OAuth）
+- **多 Provider 支持** — 支持 OpenAI、Anthropic（API Key）、Claude 订阅（OAuth）及 ChatGPT 订阅（OAuth）
 - **流式传输** — 完整的 SSE 流式支持
 - **单一二进制** — 零运行时依赖
 - **YAML 配置** — 支持环境变量插值
@@ -67,6 +67,14 @@ models:
         model: claude-sonnet-4-20250514
         # token_source: auto   # auto（默认）| env | credentials_file
         # credentials_path: /custom/path/.credentials.json  # 可选
+
+  # ChatGPT Plus/Pro/Max 订阅 —— 无需 API Key
+  - name: gpt-5
+    providers:
+      - provider: chatgpt-subscription
+        model: gpt-5.4
+        # token_source: auto   # auto（默认）| env | credentials_file
+        # credentials_path: ~/.config/rausu/chatgpt-auth.json  # 可选
 ```
 
 ### `claude-subscription` Provider
@@ -89,7 +97,46 @@ models:
         # credentials_path: ~/.claude/.credentials.json  # 可选路径覆盖
 ```
 
-> **注意：** `anthropic` 和 `claude-subscription` 是完全独立的 Provider，可以在同一配置文件中共存，分别服务不同的虚拟模型名称。
+### `chatgpt-subscription` Provider
+
+通过 OAuth 使用你的 ChatGPT Plus/Pro/Max 订阅，无需付费 API Key。请求会在内部从 Chat Completions 格式桥接到 ChatGPT Responses API。
+
+**Token 来源（按优先级顺序）：**
+
+1. **`env`** — 设置环境变量 `CHATGPT_ACCESS_TOKEN=<access_token>`（可选配置 `CHATGPT_REFRESH_TOKEN` 和 `CHATGPT_ACCOUNT_ID`）
+2. **`credentials_file`** — 读取 `~/.config/rausu/chatgpt-auth.json`，支持自动刷新 Token
+3. **`auto`**（默认）—— 先尝试 `env`，再尝试 `credentials_file`
+
+```yaml
+models:
+  - name: gpt-5
+    providers:
+      - provider: chatgpt-subscription
+        model: gpt-5.4
+        token_source: env              # 可选，默认：auto
+
+  - name: gpt-5-pro
+    providers:
+      - provider: chatgpt-subscription
+        model: gpt-5.4-pro
+        token_source: credentials_file
+        credentials_path: /custom/path/chatgpt-auth.json  # 可选路径覆盖
+```
+
+**凭证文件格式**（`~/.config/rausu/chatgpt-auth.json`）：
+
+```json
+{
+  "access_token": "eyJ...",
+  "refresh_token": "...",
+  "expires_at": 1900000000000,
+  "account_id": "acc_..."
+}
+```
+
+**支持的模型：** `gpt-5.4`、`gpt-5.4-pro`、`gpt-5.3-codex`、`gpt-5.3-codex-spark`、`gpt-5.3-instant`、`gpt-5.3-chat-latest`
+
+> **注意：** 四个 Provider（`openai`、`anthropic`、`claude-subscription`、`chatgpt-subscription`）完全独立，可以在同一配置文件中共存，分别服务不同的虚拟模型名称。
 
 环境变量覆盖使用 `RAUSU__` 前缀，以 `__` 为分隔符：
 
