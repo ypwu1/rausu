@@ -182,7 +182,16 @@ response = client.chat.completions.create(
 |----------|--------|-------------|
 | `/health` | GET | Health check |
 | `/v1/models` | GET | List configured models |
-| `/v1/chat/completions` | POST | Chat completions (streaming & non-streaming) |
+| `/v1/chat/completions` | POST | Chat completions — routing + format translation |
+| `/v1/responses` | POST | OpenAI Responses API — transparent passthrough (Codex CLI) |
+| `/v1/responses/compact` | POST | OpenAI Responses API compact variant — transparent passthrough |
+| `/v1/messages` | POST | Anthropic Messages API — transparent passthrough (Claude Code) |
+
+## Local Proxy Usage
+
+Rausu can run locally as a single-user proxy for Codex CLI and Claude Code. Local clients pass a placeholder API key; Rausu injects the real upstream credentials automatically.
+
+See [docs/LOCAL_PROXY_USAGE.md](docs/LOCAL_PROXY_USAGE.md) for a full guide covering config examples, fake-key behavior, and connection instructions for Codex CLI and Claude Code.
 
 ## Architecture
 

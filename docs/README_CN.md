@@ -265,6 +265,9 @@ models:
 | 方法 | 端点 | 描述 |
 |------|------|------|
 | `POST` | `/v1/chat/completions` | 聊天补全（流式 & 非流式） |
+| `POST` | `/v1/responses` | OpenAI Responses API — 透明直传（Codex CLI） |
+| `POST` | `/v1/responses/compact` | OpenAI Responses API 紧凑变体 — 透明直传 |
+| `POST` | `/v1/messages` | Anthropic Messages API — 透明直传（Claude Code） |
 | `GET` | `/v1/models` | 列出已配置的模型 |
 | `GET` | `/health` | 健康检查 |
 
@@ -278,13 +281,12 @@ models:
 | `POST` | `/v1/audio/speech` | Phase 3 |
 | `POST` | `/v1/rerank` | Phase 3 |
 | `POST` | `/v1/batches` | Phase 3 |
-| `POST` | `/v1/responses` | Phase 3 |
-| `POST` | `/v1/messages` | Phase 3 |
 
 ---
 
 ## 设计文档
 
+- [本地代理使用指南](LOCAL_PROXY_USAGE_CN.md)（[English](LOCAL_PROXY_USAGE.md)）— 连接 Codex CLI 和 Claude Code
 - [架构方向 — 本地优先，网关兼容](ARCHITECTURE_DIRECTION_CN.md)（[English](ARCHITECTURE_DIRECTION.md)）
 - [ChatGPT 订阅 Provider 设计](CHATGPT_SUBSCRIPTION_DESIGN.md)
 - [Anthropic Messages API 代理设计](MESSAGES_API_PROXY_DESIGN.md)

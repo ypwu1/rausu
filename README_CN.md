@@ -182,7 +182,16 @@ response = client.chat.completions.create(
 |------|------|------|
 | `/health` | GET | 健康检查 |
 | `/v1/models` | GET | 列出已配置的模型 |
-| `/v1/chat/completions` | POST | 聊天补全（流式 & 非流式） |
+| `/v1/chat/completions` | POST | 聊天补全 — 路由 + 格式转换 |
+| `/v1/responses` | POST | OpenAI Responses API — 透明直传（Codex CLI） |
+| `/v1/responses/compact` | POST | OpenAI Responses API 紧凑变体 — 透明直传 |
+| `/v1/messages` | POST | Anthropic Messages API — 透明直传（Claude Code） |
+
+## 本地代理使用
+
+Rausu 可作为 Codex CLI 和 Claude Code 的单用户本地代理运行。本地客户端传入占位 API Key，Rausu 自动注入真实的上游凭证。
+
+详见 [docs/LOCAL_PROXY_USAGE_CN.md](docs/LOCAL_PROXY_USAGE_CN.md)，包含配置示例、伪 Key 行为说明以及 Codex CLI 和 Claude Code 的接入指南。
 
 ## 架构
 

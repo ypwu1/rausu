@@ -1,21 +1,66 @@
 # config.example.yaml — Rausu LLM API Gateway configuration example
+#
+# Copy this file to config.yaml and fill in your credentials.
+# Environment variable interpolation: ${VAR_NAME}
+# CLI override prefix: RAUSU__SERVER__PORT=8080
+
 server:
-  host: 0.0.0.0
+  host: 127.0.0.1   # use 0.0.0.0 to expose on the network
   port: 4000
 
 logging:
-  level: info
-  format: json   # json | pretty
+  level: info        # trace | debug | info | warn | error
+  format: pretty     # json (structured) | pretty (human-readable)
 
 models:
+  # ── OpenAI (API key) ────────────────────────────────────────────────────────
   - name: gpt-4o
     providers:
       - provider: openai
         model: gpt-4o
         api_key: "${OPENAI_API_KEY}"
 
+  - name: o3
+    providers:
+      - provider: openai
+        model: o3
+        api_key: "${OPENAI_API_KEY}"
+
+  # ── Anthropic (API key) ──────────────────────────────────────────────────────
   - name: claude-sonnet
     providers:
       - provider: anthropic
         model: claude-sonnet-4-20250514
         api_key: "${ANTHROPIC_API_KEY}"
+
+  # ── ChatGPT subscription (Plus / Pro / Max — no API key required) ────────────
+  # token_source: auto  →  tries CHATGPT_ACCESS_TOKEN env var first,
+  #                        then ~/.config/rausu/chatgpt-auth.json
+  - name: gpt-5
+    providers:
+      - provider: chatgpt-subscription
+        model: gpt-5.4
+        token_source: auto
+
+  - name: gpt-5-codex
+    providers:
+      - provider: chatgpt-subscription
+        model: gpt-5.3-codex
+        token_source: auto
+
+  # ── Claude subscription (Pro / Max — no API key required) ────────────────────
+  # token_source: auto  →  tries CLAUDE_OAUTH_TOKEN env var first,
+  #                        then ~/.claude/.credentials.json (written by Claude CLI)
+  #
+  # Use the exact model ID as the virtual name so Claude Code works without changes.
+  - name: claude-sonnet-4-20250514
+    providers:
+      - provider: claude-subscription
+        model: claude-sonnet-4-20250514
+        token_source: auto
+
+  - name: claude-opus-4-20250514
+    providers:
+      - provider: claude-subscription
+        model: claude-opus-4-20250514
+        token_source: auto

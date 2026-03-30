@@ -265,6 +265,9 @@ Adding a new provider? Implement the `Provider` trait — see [CONTRIBUTING.md](
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/v1/chat/completions` | Chat completions (streaming & non-streaming) |
+| `POST` | `/v1/responses` | OpenAI Responses API — transparent passthrough (Codex CLI) |
+| `POST` | `/v1/responses/compact` | OpenAI Responses API compact variant — transparent passthrough |
+| `POST` | `/v1/messages` | Anthropic Messages API — transparent passthrough (Claude Code) |
 | `GET` | `/v1/models` | List configured models |
 | `GET` | `/health` | Health check |
 
@@ -278,13 +281,12 @@ Adding a new provider? Implement the `Provider` trait — see [CONTRIBUTING.md](
 | `POST` | `/v1/audio/speech` | Phase 3 |
 | `POST` | `/v1/rerank` | Phase 3 |
 | `POST` | `/v1/batches` | Phase 3 |
-| `POST` | `/v1/responses` | Phase 3 |
-| `POST` | `/v1/messages` | Phase 3 |
 
 ---
 
 ## Design Documents
 
+- [Local Proxy Usage Guide](LOCAL_PROXY_USAGE.md) ([中文](LOCAL_PROXY_USAGE_CN.md)) — connecting Codex CLI and Claude Code
 - [Architecture Direction — Local-First, Gateway-Compatible](ARCHITECTURE_DIRECTION.md) ([中文](ARCHITECTURE_DIRECTION_CN.md))
 - [ChatGPT Subscription Provider Design](CHATGPT_SUBSCRIPTION_DESIGN.md)
 - [Anthropic Messages API Proxy Design](MESSAGES_API_PROXY_DESIGN.md)
