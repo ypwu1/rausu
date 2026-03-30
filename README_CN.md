@@ -1,6 +1,13 @@
-# Rausu (ラウス)
+<p align="center">
+  <img src="assets/icon.jpg" width="160" alt="Rausu Icon" />
+</p>
 
-> [English Version](./README.md)
+<h1 align="center">Rausu</h1>
+<p align="center"><em>ラウス</em></p>
+
+<p align="center">
+  <a href="./README.md">English Version</a>
+</p>
 
 一个用 Rust 编写的高性能 LLM API 网关——作为 [LiteLLM Proxy](https://github.com/BerriAI/litellm) 的替代方案，在性能、内存占用和部署便捷性上全面超越（单一二进制文件）。
 

@@ -1,6 +1,13 @@
-# Rausu (ラウス)
+<p align="center">
+  <img src="assets/icon.jpg" width="160" alt="Rausu Icon" />
+</p>
 
-> [中文版](./README_CN.md)
+<h1 align="center">Rausu</h1>
+<p align="center"><em>ラウス</em></p>
+
+<p align="center">
+  <a href="./README_CN.md">中文版</a>
+</p>
 
 A high-performance LLM API Gateway written in Rust — a drop-in replacement for [LiteLLM Proxy](https://github.com/BerriAI/litellm) with better performance, smaller footprint, and simpler deployment (single binary).
 
