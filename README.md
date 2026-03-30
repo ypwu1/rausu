@@ -177,6 +177,10 @@ response = client.chat.completions.create(
 | `/v1/models` | GET | List configured models |
 | `/v1/chat/completions` | POST | Chat completions (streaming & non-streaming) |
 
+## Architecture
+
+See [docs/ARCHITECTURE_DIRECTION.md](docs/ARCHITECTURE_DIRECTION.md) for the full architecture decision record (local-first, gateway-compatible design).
+
 ## Build
 
 Requirements: Rust 1.70+

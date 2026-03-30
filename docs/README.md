@@ -283,6 +283,14 @@ Adding a new provider? Implement the `Provider` trait — see [CONTRIBUTING.md](
 
 ---
 
+## Design Documents
+
+- [Architecture Direction — Local-First, Gateway-Compatible](ARCHITECTURE_DIRECTION.md) ([中文](ARCHITECTURE_DIRECTION_CN.md))
+- [ChatGPT Subscription Provider Design](CHATGPT_SUBSCRIPTION_DESIGN.md)
+- [Anthropic Messages API Proxy Design](MESSAGES_API_PROXY_DESIGN.md)
+
+---
+
 ## Architecture
 
 ```

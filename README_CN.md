@@ -177,6 +177,10 @@ response = client.chat.completions.create(
 | `/v1/models` | GET | 列出已配置的模型 |
 | `/v1/chat/completions` | POST | 聊天补全（流式 & 非流式） |
 
+## 架构
+
+详见 [docs/ARCHITECTURE_DIRECTION_CN.md](docs/ARCHITECTURE_DIRECTION_CN.md)，了解完整的架构决策记录（本地优先、网关兼容设计）。
+
 ## 构建
 
 要求：Rust 1.70+

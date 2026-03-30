@@ -283,6 +283,14 @@ models:
 
 ---
 
+## 设计文档
+
+- [架构方向 — 本地优先，网关兼容](ARCHITECTURE_DIRECTION_CN.md)（[English](ARCHITECTURE_DIRECTION.md)）
+- [ChatGPT 订阅 Provider 设计](CHATGPT_SUBSCRIPTION_DESIGN.md)
+- [Anthropic Messages API 代理设计](MESSAGES_API_PROXY_DESIGN.md)
+
+---
+
 ## 架构
 
 ```
