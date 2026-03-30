@@ -22,6 +22,26 @@ A high-performance, low-resource LLM API Gateway written in Rust — a drop-in r
 - Not a multi-tenant SaaS platform (single-org focus first)
 - Not a full observability platform (integrates with existing ones)
 
+### 1.4 Current Execution Strategy
+
+> Architecture details: see [docs/ARCHITECTURE_DIRECTION.md](docs/ARCHITECTURE_DIRECTION.md)
+
+Rausu is executing in a **local-first, gateway-compatible** order.
+
+**Current focus — Local Proxy Productization:**
+- Single-user localhost proxy for AI coding tools (Codex CLI, Claude Code)
+- Subscription-backed providers: `claude-subscription` (Claude web auth) and `chatgpt-subscription` (ChatGPT web auth)
+- No upstream API key required for local use; Rausu handles real auth
+- No database, no virtual keys, no admin UI — file-based config only
+- Priority endpoints: `/v1/responses`, `/v1/responses/compact`, `/v1/chat/completions`, `/v1/messages`
+
+**Later phases — Gateway Expansion:**
+- Multi-user / remote deployment concerns (authn/authz, virtual keys, rate limits)
+- Admin UI, spend tracking, guardrails
+- Broad provider coverage (Bedrock, Azure, Vertex AI, Ollama, 100+ providers)
+
+The architecture is designed to keep the gateway path open without forcing premature complexity into the local runtime. Both runtimes share a common core layer (provider abstraction, routing, streaming relay, error mapping). See Section 5 for the phased delivery plan.
+
 ---
 
 ## 2. Functional Requirements
@@ -33,17 +53,18 @@ All endpoints follow the OpenAI API specification and return unified response sc
 | Endpoint | Description | Priority |
 |---|---|---|
 | `POST /v1/chat/completions` | Chat completions (streaming & non-streaming) | P0 |
-| `POST /v1/embeddings` | Text embeddings | P0 |
+| `POST /v1/responses` | OpenAI Responses API (Codex CLI primary endpoint) | P0 |
+| `POST /v1/responses/compact` | Responses API compact variant (Codex CLI) | P0 |
+| `POST /v1/messages` | Anthropic Messages API (native passthrough, Claude Code) | P0 |
+| `GET /v1/models` | List available models | P0 |
+| `GET /health` | Health check | P0 |
+| `POST /v1/embeddings` | Text embeddings | P1 |
 | `POST /v1/images/generations` | Image generation | P1 |
 | `POST /v1/audio/transcriptions` | Audio transcription (Whisper-compatible) | P1 |
 | `POST /v1/audio/speech` | Text-to-speech | P1 |
-| `POST /v1/moderations` | Content moderation | P2 |
 | `POST /v1/rerank` | Reranking | P1 |
+| `POST /v1/moderations` | Content moderation | P2 |
 | `POST /v1/batches` | Batch processing | P2 |
-| `POST /v1/responses` | OpenAI Responses API | P1 |
-| `POST /v1/messages` | Anthropic Messages API (native passthrough) | P1 |
-| `GET /v1/models` | List available models | P0 |
-| `GET /health` | Health check | P0 |
 
 ### 2.2 Provider Abstraction
 
@@ -53,17 +74,19 @@ Each provider implements a unified trait that covers all supported endpoint type
 
 #### 2.2.2 Provider List (by Priority)
 
-**Phase 1 (MVP):**
-- OpenAI
-- Anthropic
+**Phase 1 (MVP — local proxy):**
+- `claude-subscription` (Claude web subscription, local auth injection)
+- `chatgpt-subscription` (ChatGPT web subscription, local auth injection)
+- OpenAI (API key)
+- Anthropic (API key)
 
-**Phase 2:**
+**Phase 3 (API gateway expansion):**
 - AWS Bedrock
 - Azure OpenAI
 - Google Vertex AI
 - Ollama
 
-**Phase 3:**
+**Phase 4+:**
 - vLLM
 - NVIDIA NIM
 - Groq
@@ -71,7 +94,7 @@ Each provider implements a unified trait that covers all supported endpoint type
 - Cohere
 - DeepSeek
 
-**Phase 4+:**
+**Phase 6+:**
 - Remaining providers via community contributions and/or plugin system
 - Target: 100+ providers
 
@@ -95,6 +118,8 @@ Each provider implements a unified trait that covers all supported endpoint type
 
 ### 2.4 Authentication & Key Management
 
+> **Scope note:** Virtual keys, team/user binding, budget limits, and rate limiting are **gateway-era features** (see §1.4). The local proxy MVP uses file-based config; the local HTTP server accepts any API key from clients (fake-key compatibility) while Rausu handles real upstream auth.
+
 | Feature | Description | Priority |
 |---|---|---|
 | **Virtual Keys** | Issue proxy API keys that map to upstream provider credentials | P0 |
@@ -105,6 +130,8 @@ Each provider implements a unified trait that covers all supported endpoint type
 | **Key Scoping** | Restrict keys to specific models or endpoints | P2 |
 
 ### 2.5 Spend Tracking
+
+> **Scope note:** Full spend tracking with a database and spend API is a **gateway-era feature** (Phase 4+). The local proxy MVP logs usage locally without a database requirement.
 
 | Feature | Description | Priority |
 |---|---|---|
@@ -136,6 +163,8 @@ Each provider implements a unified trait that covers all supported endpoint type
 | **Callback Integrations** | Langfuse / Helicone / custom webhook | P2 |
 
 ### 2.8 Admin UI
+
+> **Scope note:** The Admin UI is a **gateway-era feature** (Phase 5). The local proxy MVP has no web dashboard. A lightweight local stats page may be added later as a local-runtime convenience feature.
 
 | Feature | Description | Priority |
 |---|---|---|
@@ -352,26 +381,43 @@ spend:
 
 ## 5. Delivery Phases
 
-### Phase 1 — Core Proxy (MVP)
-**Goal**: A working OpenAI-compatible proxy that routes to OpenAI and Anthropic.
+> For the architectural rationale behind this sequencing, see [docs/ARCHITECTURE_DIRECTION.md](docs/ARCHITECTURE_DIRECTION.md).
 
-- [ ] `axum` HTTP server with `/v1/chat/completions` and `/v1/models`
-- [ ] Provider trait + OpenAI provider + Anthropic provider
-- [ ] Unified request/response schema (OpenAI format)
-- [ ] SSE streaming passthrough
-- [ ] YAML configuration + environment variable interpolation
-- [ ] `tracing` structured logging (JSON)
-- [ ] Single binary build + Dockerfile
-- [ ] Basic error mapping (provider errors → OpenAI error codes)
-- [ ] Health endpoint (`/health`)
-- [ ] README (EN + CN)
+The delivery order is **local-first**: get the single-user localhost proxy solid before expanding into gateway/multi-user territory.
 
-**Exit Criteria**: Can proxy chat requests to OpenAI and Anthropic with streaming, from any OpenAI SDK client.
+### Phase 1 — Local Proxy MVP
+**Goal**: A working localhost proxy for Codex CLI and Claude Code using existing subscriptions.
 
-### Phase 2 — Multi-Provider + Routing
-**Goal**: Production-grade routing across multiple providers.
+- [x] `axum` HTTP server with `/v1/chat/completions`, `/v1/responses`, `/v1/responses/compact`, `/v1/messages`
+- [x] `claude-subscription` provider (Claude web auth, `/v1/messages` native passthrough)
+- [x] `chatgpt-subscription` provider (ChatGPT web auth, `/v1/responses` native passthrough)
+- [x] Provider trait + OpenAI provider + Anthropic provider (API key)
+- [x] SSE streaming passthrough
+- [x] YAML configuration + environment variable interpolation
+- [x] `tracing` structured logging (JSON)
+- [x] Single binary build + Dockerfile
+- [x] Basic error mapping (provider errors → OpenAI error codes)
+- [x] Health endpoint (`/health`)
+- [x] README (EN + CN)
 
-- [ ] Bedrock / Azure / Vertex AI / Ollama providers
+**Exit Criteria**: Codex CLI and Claude Code can be pointed at Rausu and use existing subscriptions without providing real API keys.
+
+### Phase 2 — Local Proxy Hardening
+**Goal**: Reliable, friction-free single-user local proxy experience.
+
+- [ ] Fake-key compatibility — accept any API key from local clients (Rausu handles real upstream auth)
+- [ ] `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` override support for transparent tool takeover
+- [ ] Timeouts, retries with exponential backoff
+- [ ] Structured per-request logging (local file, no database required)
+- [ ] Graceful shutdown improvements
+- [ ] `/v1/models` list reflecting configured providers
+
+**Exit Criteria**: Any OpenAI SDK or Anthropic SDK client pointed at Rausu works reliably with no configuration friction.
+
+### Phase 3 — API Gateway Expansion
+**Goal**: Production-grade multi-provider routing for team / self-hosted use.
+
+- [ ] AWS Bedrock / Azure OpenAI / Google Vertex AI / Ollama providers
 - [ ] Router: retry with exponential backoff
 - [ ] Router: fallback chain
 - [ ] Router: weighted load balancing
@@ -379,10 +425,11 @@ spend:
 - [ ] `/v1/images/generations` endpoint
 - [ ] Basic API key authentication (master key)
 - [ ] Circuit breaker per provider
+- [ ] Remote bind (non-localhost) + optional TLS termination
 
-**Exit Criteria**: Can route traffic across 6 providers with automatic failover.
+**Exit Criteria**: Can route traffic across multiple providers with automatic failover in a self-hosted deployment.
 
-### Phase 3 — Spend Tracking + Key Management
+### Phase 4 — Spend Tracking + Key Management
 **Goal**: Multi-key access control with cost visibility.
 
 - [ ] SQLite storage layer (sqlx)
@@ -398,8 +445,8 @@ spend:
 
 **Exit Criteria**: Can issue virtual keys with budget limits and query spend data.
 
-### Phase 4 — Guardrails + Admin UI
-**Goal**: Content safety and visual management.
+### Phase 5 — Guardrails + Admin UI
+**Goal**: Content safety and visual management for gateway deployments.
 
 - [ ] Guardrail middleware pipeline
 - [ ] PII detection & masking
@@ -415,7 +462,7 @@ spend:
 
 **Exit Criteria**: Non-technical admins can manage the gateway through the UI.
 
-### Phase 5 — Ecosystem & Extensions
+### Phase 6 — Ecosystem & Extensions
 **Goal**: Community growth and advanced features.
 
 - [ ] Plugin/WASM extension mechanism for custom providers
@@ -441,8 +488,8 @@ spend:
 | Idle memory | < 50MB |
 | Docker image size | < 50MB |
 | Startup time | < 1s |
-| Provider coverage (Phase 2) | 6 providers |
-| Provider coverage (Phase 5) | 20+ providers |
+| Provider coverage (Phase 3) | 6+ providers |
+| Provider coverage (Phase 6) | 20+ providers |
 
 ---
 

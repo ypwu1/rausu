@@ -22,6 +22,26 @@
 - 不是多租户 SaaS 平台（优先单组织场景）
 - 不是完整的可观测性平台（与现有平台集成）
 
+### 1.4 当前执行策略
+
+> 架构细节详见 [docs/ARCHITECTURE_DIRECTION_CN.md](docs/ARCHITECTURE_DIRECTION_CN.md)
+
+Rausu 采用 **本地优先、网关兼容** 的执行顺序。
+
+**当前重点——本地代理产品化：**
+- 面向 AI 编程工具（Codex CLI、Claude Code）的单用户本地代理
+- 订阅型 provider：`claude-subscription`（Claude 网页订阅，本地认证注入）和 `chatgpt-subscription`（ChatGPT 网页订阅，本地认证注入）
+- 本地使用无需上游 API Key；Rausu 负责处理真实认证
+- 无数据库、无虚拟 Key、无管理面板——仅基于文件的配置
+- 优先端点：`/v1/responses`、`/v1/responses/compact`、`/v1/chat/completions`、`/v1/messages`
+
+**后续阶段——网关扩展：**
+- 多用户 / 远程部署相关能力（认证授权、虚拟 Key、速率限制）
+- 管理面板、费用追踪、安全防护
+- 广泛的 provider 覆盖（Bedrock、Azure、Vertex AI、Ollama、100+ provider）
+
+架构设计保持网关扩展路径开放，同时不向本地运行时引入过早的复杂性。两个运行时共享同一个核心层（provider 抽象、路由、流式中继、错误映射）。详见第 5 节的分阶段交付计划。
+
 ---
 
 ## 2. 功能需求
@@ -33,17 +53,18 @@
 | 端点 | 描述 | 优先级 |
 |---|---|---|
 | `POST /v1/chat/completions` | 聊天补全（流式 & 非流式） | P0 |
-| `POST /v1/embeddings` | 文本嵌入 | P0 |
+| `POST /v1/responses` | OpenAI Responses API（Codex CLI 主端点） | P0 |
+| `POST /v1/responses/compact` | Responses API 紧凑变体（Codex CLI） | P0 |
+| `POST /v1/messages` | Anthropic Messages API（原生透传，Claude Code） | P0 |
+| `GET /v1/models` | 列出可用模型 | P0 |
+| `GET /health` | 健康检查 | P0 |
+| `POST /v1/embeddings` | 文本嵌入 | P1 |
 | `POST /v1/images/generations` | 图像生成 | P1 |
 | `POST /v1/audio/transcriptions` | 音频转文字（Whisper 兼容） | P1 |
 | `POST /v1/audio/speech` | 文字转语音 | P1 |
-| `POST /v1/moderations` | 内容审核 | P2 |
 | `POST /v1/rerank` | 重排序 | P1 |
+| `POST /v1/moderations` | 内容审核 | P2 |
 | `POST /v1/batches` | 批处理 | P2 |
-| `POST /v1/responses` | OpenAI Responses API | P1 |
-| `POST /v1/messages` | Anthropic Messages API（原生透传） | P1 |
-| `GET /v1/models` | 列出可用模型 | P0 |
-| `GET /health` | 健康检查 | P0 |
 
 ### 2.2 Provider 抽象
 
@@ -53,17 +74,19 @@
 
 #### 2.2.2 Provider 列表（按优先级）
 
-**Phase 1（MVP）：**
-- OpenAI
-- Anthropic
+**Phase 1（MVP——本地代理）：**
+- `claude-subscription`（Claude 网页订阅，本地认证注入）
+- `chatgpt-subscription`（ChatGPT 网页订阅，本地认证注入）
+- OpenAI（API Key）
+- Anthropic（API Key）
 
-**Phase 2：**
+**Phase 3（API 网关扩展）：**
 - AWS Bedrock
 - Azure OpenAI
 - Google Vertex AI
 - Ollama
 
-**Phase 3：**
+**Phase 4+：**
 - vLLM
 - NVIDIA NIM
 - Groq
@@ -71,7 +94,7 @@
 - Cohere
 - DeepSeek
 
-**Phase 4+：**
+**Phase 6+：**
 - 其余 provider 通过社区贡献和/或插件系统扩展
 - 目标：100+ provider
 
@@ -95,6 +118,8 @@
 
 ### 2.4 认证与 Key 管理
 
+> **范围说明：** 虚拟 Key、团队/用户绑定、预算限制和速率限制是**网关阶段功能**（见 §1.4）。本地代理 MVP 使用基于文件的配置；本地 HTTP 服务器接受客户端传入的任意 API Key（假 Key 兼容），Rausu 负责处理真实的上游认证。
+
 | 功能 | 描述 | 优先级 |
 |---|---|---|
 | **虚拟 Key** | 发放代理 API Key，映射到上游 provider 凭证 | P0 |
@@ -105,6 +130,8 @@
 | **Key 作用域** | 限制 Key 只能访问特定模型或端点 | P2 |
 
 ### 2.5 费用追踪
+
+> **范围说明：** 带数据库和费用 API 的完整费用追踪是**网关阶段功能**（Phase 4+）。本地代理 MVP 在本地记录用量，无需数据库。
 
 | 功能 | 描述 | 优先级 |
 |---|---|---|
@@ -136,6 +163,8 @@
 | **回调集成** | Langfuse / Helicone / 自定义 Webhook | P2 |
 
 ### 2.8 管理面板（Admin UI）
+
+> **范围说明：** 管理面板是**网关阶段功能**（Phase 5）。本地代理 MVP 不包含 Web 仪表盘。后续可能作为本地运行时的便捷功能添加轻量级本地统计页面。
 
 | 功能 | 描述 | 优先级 |
 |---|---|---|
@@ -352,26 +381,43 @@ spend:
 
 ## 5. 交付阶段
 
-### Phase 1 — 核心代理（MVP）
-**目标**：一个可工作的 OpenAI 兼容代理，能路由到 OpenAI 和 Anthropic。
+> 本阶段排序的架构设计依据详见 [docs/ARCHITECTURE_DIRECTION_CN.md](docs/ARCHITECTURE_DIRECTION_CN.md)。
 
-- [ ] `axum` HTTP 服务器，支持 `/v1/chat/completions` 和 `/v1/models`
-- [ ] Provider trait + OpenAI provider + Anthropic provider
-- [ ] 统一请求/响应 schema（OpenAI 格式）
-- [ ] SSE 流式透传
-- [ ] YAML 配置 + 环境变量插值
-- [ ] `tracing` 结构化日志（JSON）
-- [ ] 单二进制构建 + Dockerfile
-- [ ] 基础错误映射（provider 错误 → OpenAI 错误码）
-- [ ] 健康检查端点（`/health`）
-- [ ] README（中英文）
+交付顺序为**本地优先**：先将单用户本地代理做扎实，再扩展到网关/多用户领域。
 
-**退出标准**：能通过任意 OpenAI SDK 客户端，代理聊天请求到 OpenAI 和 Anthropic，支持流式传输。
+### Phase 1 — 本地代理 MVP
+**目标**：一个可工作的本地代理，供 Codex CLI 和 Claude Code 使用现有订阅。
 
-### Phase 2 — 多 Provider + 路由
-**目标**：生产级的多 provider 流量路由。
+- [x] `axum` HTTP 服务器，支持 `/v1/chat/completions`、`/v1/responses`、`/v1/responses/compact`、`/v1/messages`
+- [x] `claude-subscription` provider（Claude 网页认证，`/v1/messages` 原生透传）
+- [x] `chatgpt-subscription` provider（ChatGPT 网页认证，`/v1/responses` 原生透传）
+- [x] Provider trait + OpenAI provider + Anthropic provider（API Key）
+- [x] SSE 流式透传
+- [x] YAML 配置 + 环境变量插值
+- [x] `tracing` 结构化日志（JSON）
+- [x] 单二进制构建 + Dockerfile
+- [x] 基础错误映射（provider 错误 → OpenAI 错误码）
+- [x] 健康检查端点（`/health`）
+- [x] README（中英文）
 
-- [ ] Bedrock / Azure / Vertex AI / Ollama provider
+**退出标准**：Codex CLI 和 Claude Code 可以指向 Rausu，无需提供真实 API Key 即可使用现有订阅发起请求。
+
+### Phase 2 — 本地代理稳固化
+**目标**：可靠、无摩擦的单用户本地代理体验。
+
+- [ ] 假 Key 兼容——接受本地客户端传入的任意 API Key（Rausu 负责处理真实上游认证）
+- [ ] 支持 `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` 覆盖（工具透明接管）
+- [ ] 超时、指数退避重试
+- [ ] 结构化单请求日志记录（本地文件，无需数据库）
+- [ ] 优雅关闭改进
+- [ ] `/v1/models` 列表反映已配置的 provider
+
+**退出标准**：任意指向 Rausu 的 OpenAI SDK 或 Anthropic SDK 客户端均可稳定运行，无需额外配置。
+
+### Phase 3 — API 网关扩展
+**目标**：面向团队/自托管场景的生产级多 provider 路由。
+
+- [ ] AWS Bedrock / Azure OpenAI / Google Vertex AI / Ollama provider
 - [ ] 路由器：指数退避重试
 - [ ] 路由器：故障转移链
 - [ ] 路由器：加权负载均衡
@@ -379,10 +425,11 @@ spend:
 - [ ] `/v1/images/generations` 端点
 - [ ] 基础 API Key 认证（master key）
 - [ ] 每个 provider 的熔断器
+- [ ] 远程绑定（非 localhost）+ 可选 TLS 终止
 
-**退出标准**：能在 6 个 provider 间路由流量，支持自动故障转移。
+**退出标准**：能在多个 provider 间路由流量，支持自动故障转移，可用于自托管部署。
 
-### Phase 3 — 费用追踪 + Key 管理
+### Phase 4 — 费用追踪 + Key 管理
 **目标**：多 Key 访问控制与成本可见性。
 
 - [ ] SQLite 存储层（sqlx）
@@ -398,8 +445,8 @@ spend:
 
 **退出标准**：能发放带预算限制的虚拟 Key 并查询费用数据。
 
-### Phase 4 — 防护 + 管理面板
-**目标**：内容安全和可视化管理。
+### Phase 5 — 防护 + 管理面板
+**目标**：面向网关部署的内容安全和可视化管理。
 
 - [ ] 防护中间件管道
 - [ ] PII 检测与脱敏
@@ -415,7 +462,7 @@ spend:
 
 **退出标准**：非技术人员可通过 UI 管理网关。
 
-### Phase 5 — 生态扩展
+### Phase 6 — 生态扩展
 **目标**：社区增长与高级功能。
 
 - [ ] Plugin/WASM 扩展机制（自定义 provider 热加载）
@@ -441,8 +488,8 @@ spend:
 | 空闲内存 | < 50MB |
 | Docker 镜像大小 | < 50MB |
 | 启动时间 | < 1s |
-| Provider 覆盖（Phase 2） | 6 个 provider |
-| Provider 覆盖（Phase 5） | 20+ provider |
+| Provider 覆盖（Phase 3） | 6+ provider |
+| Provider 覆盖（Phase 6） | 20+ provider |
 
 ---
 
