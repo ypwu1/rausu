@@ -624,6 +624,48 @@ impl Provider for ChatGptSubscriptionProvider {
         Ok(Box::pin(stream))
     }
 
+    async fn proxy_responses(
+        &self,
+        body: serde_json::Value,
+        _is_stream: bool,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let (token, account_id) = self
+            .token_manager
+            .get_token()
+            .await
+            .map_err(|e| ProviderError::Internal(e.to_string()))?;
+
+        debug!("Sending passthrough Responses API request via chatgpt-subscription");
+
+        let mut builder = self
+            .client
+            .post(RESPONSES_API_URL)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("OpenAI-Beta", "responses=experimental")
+            .header("originator", "pi")
+            .header("User-Agent", &self.user_agent)
+            .header("Content-Type", "application/json");
+
+        if let Some(aid) = &account_id {
+            builder = builder.header("chatgpt-account-id", aid);
+        }
+
+        let response = builder.json(&body).send().await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let status_code = status.as_u16();
+            let body = response.text().await.unwrap_or_default();
+            error!(status = status_code, body = %body, "chatgpt-subscription responses proxy error");
+            return Err(ProviderError::ProviderResponse {
+                status: status_code,
+                message: body,
+            });
+        }
+
+        Ok(response)
+    }
+
     fn models(&self) -> Vec<ModelInfo> {
         let now = Utc::now().timestamp();
         self.model_names

@@ -27,7 +27,11 @@ use crate::schema::chat::ModelInfo;
 pub mod routes;
 
 use routes::{
-    chat::chat_completions, health::health_check, messages::messages, models::list_models,
+    chat::chat_completions,
+    health::health_check,
+    messages::messages,
+    models::list_models,
+    responses::{responses, responses_compact},
 };
 
 /// Shared application state passed to all route handlers.
@@ -68,6 +72,8 @@ impl Server {
             .route("/health", get(health_check))
             .route("/v1/models", get(list_models))
             .route("/v1/chat/completions", post(chat_completions))
+            .route("/v1/responses", post(responses))
+            .route("/v1/responses/compact", post(responses_compact))
             .route("/v1/messages", post(messages))
             .layer(cors)
             .with_state(state);
