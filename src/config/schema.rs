@@ -67,7 +67,7 @@ pub struct ModelConfig {
 /// A single provider deployment for a model.
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProviderDeployment {
-    /// Provider type: openai | anthropic | claude-subscription | chatgpt-subscription.
+    /// Provider type: openai | anthropic | claude-subscription | chatgpt-subscription | vertex-ai.
     pub provider: String,
     /// The model name on the provider side.
     pub model: String,
@@ -77,8 +77,19 @@ pub struct ProviderDeployment {
     pub base_url: Option<String>,
     /// Token source for `claude-subscription`: `env` | `credentials_file` | `auto` (default).
     pub token_source: Option<String>,
-    /// Custom path to the Claude credentials file (overrides default `~/.claude/.credentials.json`).
+    /// Custom path to the credentials file.
+    ///
+    /// - For `claude-subscription`: overrides default `~/.claude/.credentials.json`.
+    /// - For `vertex-ai`: path to a service-account JSON or ADC JSON file; also
+    ///   falls back to `GOOGLE_APPLICATION_CREDENTIALS` env var, then the default
+    ///   ADC path `~/.config/gcloud/application_default_credentials.json`.
     pub credentials_path: Option<String>,
+
+    // ── Vertex AI specific ────────────────────────────────────────────────────
+    /// GCP project ID (required for `vertex-ai`).
+    pub project_id: Option<String>,
+    /// GCP region or `"global"` (required for `vertex-ai`, default `"us-central1"`).
+    pub location: Option<String>,
 }
 
 impl AppConfig {
