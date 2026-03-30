@@ -407,6 +407,23 @@ fn parse_anthropic_sse_chunk(
     results
 }
 
+/// Merge the required OAuth betas with any additional betas from the client.
+///
+/// The OAuth betas are always included. Client betas are appended if not already present.
+/// This ensures features like `context_management` that Claude Code sends are forwarded.
+fn merge_betas(required: &str, client: Option<&str>) -> String {
+    let mut betas: Vec<&str> = required.split(',').map(|s| s.trim()).collect();
+    if let Some(client_betas) = client {
+        for beta in client_betas.split(',') {
+            let beta = beta.trim();
+            if !beta.is_empty() && !betas.contains(&beta) {
+                betas.push(beta);
+            }
+        }
+    }
+    betas.join(",")
+}
+
 fn anthropic_event_to_openai_chunk(
     event: AnthropicEvent,
     id: &str,
@@ -590,6 +607,7 @@ impl Provider for ClaudeSubscriptionProvider {
         &self,
         body: serde_json::Value,
         _is_stream: bool,
+        client_betas: Option<String>,
     ) -> Result<reqwest::Response, super::ProviderError> {
         let token = self
             .token_manager
@@ -597,8 +615,11 @@ impl Provider for ClaudeSubscriptionProvider {
             .await
             .map_err(|e| super::ProviderError::Internal(e.to_string()))?;
 
+        let betas = merge_betas(OAUTH_BETAS, client_betas.as_deref());
+
         debug!(
             model = %body.get("model").and_then(|v| v.as_str()).unwrap_or("unknown"),
+            betas = %betas,
             "Forwarding Messages API request via claude-subscription"
         );
         let response = self
@@ -606,7 +627,7 @@ impl Provider for ClaudeSubscriptionProvider {
             .post(ANTHROPIC_API_URL)
             .header("Authorization", format!("Bearer {}", token))
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("anthropic-beta", OAUTH_BETAS)
+            .header("anthropic-beta", betas)
             .header("user-agent", CLAUDE_CODE_USER_AGENT)
             .header("x-app", "cli")
             .header("content-type", "application/json")

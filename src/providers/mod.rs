@@ -65,6 +65,69 @@ impl ProviderError {
     }
 }
 
+/// Core provider trait.
+///
+/// All providers must implement this trait to be usable by the gateway.
+#[async_trait]
+pub trait Provider: Send + Sync {
+    /// Returns the provider name (e.g. "openai", "anthropic").
+    fn name(&self) -> &str;
+
+    /// Perform a non-streaming chat completion.
+    async fn chat_completions(
+        &self,
+        req: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, ProviderError>;
+
+    /// Perform a streaming chat completion, returning an SSE chunk stream.
+    async fn chat_completions_stream(
+        &self,
+        req: ChatCompletionRequest,
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<ChatCompletionChunk, ProviderError>> + Send>>,
+        ProviderError,
+    >;
+
+    /// List the models available from this provider.
+    fn models(&self) -> Vec<ModelInfo>;
+
+    /// Forward a raw Anthropic Messages API request and return the upstream response.
+    ///
+    /// Only `anthropic` and `claude-subscription` providers override this.
+    /// All others return [`ProviderError::Unsupported`] by default.
+    ///
+    /// `client_betas` is the raw value of the `anthropic-beta` header sent by the
+    /// downstream client (e.g. Claude Code). Providers that set their own beta headers
+    /// should merge this value with their required betas before forwarding.
+    async fn proxy_messages(
+        &self,
+        _body: serde_json::Value,
+        _is_stream: bool,
+        _client_betas: Option<String>,
+    ) -> Result<reqwest::Response, ProviderError> {
+        Err(ProviderError::Unsupported(format!(
+            "Provider '{}' does not support the Anthropic Messages API",
+            self.name()
+        )))
+    }
+
+    /// Forward a raw OpenAI Responses API request and return the upstream response.
+    ///
+    /// Providers that speak the Responses API (e.g. `openai`, `chatgpt-subscription`)
+    /// override this method. All others return [`ProviderError::Unsupported`] by default,
+    /// which the route translates to a 405 response.
+    async fn proxy_responses(
+        &self,
+        _body: serde_json::Value,
+        _is_stream: bool,
+    ) -> Result<reqwest::Response, ProviderError> {
+        Err(ProviderError::Unsupported(format!(
+            "Provider '{}' does not support the Responses API",
+            self.name()
+        )))
+    }
+}
+
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -100,63 +163,5 @@ mod tests {
             ProviderError::Internal("something broke".to_string()).status_code(),
             500
         );
-    }
-}
-
-/// Core provider trait.
-///
-/// All providers must implement this trait to be usable by the gateway.
-#[async_trait]
-pub trait Provider: Send + Sync {
-    /// Returns the provider name (e.g. "openai", "anthropic").
-    fn name(&self) -> &str;
-
-    /// Perform a non-streaming chat completion.
-    async fn chat_completions(
-        &self,
-        req: ChatCompletionRequest,
-    ) -> Result<ChatCompletionResponse, ProviderError>;
-
-    /// Perform a streaming chat completion, returning an SSE chunk stream.
-    async fn chat_completions_stream(
-        &self,
-        req: ChatCompletionRequest,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<ChatCompletionChunk, ProviderError>> + Send>>,
-        ProviderError,
-    >;
-
-    /// List the models available from this provider.
-    fn models(&self) -> Vec<ModelInfo>;
-
-    /// Forward a raw Anthropic Messages API request and return the upstream response.
-    ///
-    /// Only `anthropic` and `claude-subscription` providers override this.
-    /// All others return [`ProviderError::Unsupported`] by default.
-    async fn proxy_messages(
-        &self,
-        _body: serde_json::Value,
-        _is_stream: bool,
-    ) -> Result<reqwest::Response, ProviderError> {
-        Err(ProviderError::Unsupported(format!(
-            "Provider '{}' does not support the Anthropic Messages API",
-            self.name()
-        )))
-    }
-
-    /// Forward a raw OpenAI Responses API request and return the upstream response.
-    ///
-    /// Providers that speak the Responses API (e.g. `openai`, `chatgpt-subscription`)
-    /// override this method. All others return [`ProviderError::Unsupported`] by default,
-    /// which the route translates to a 405 response.
-    async fn proxy_responses(
-        &self,
-        _body: serde_json::Value,
-        _is_stream: bool,
-    ) -> Result<reqwest::Response, ProviderError> {
-        Err(ProviderError::Unsupported(format!(
-            "Provider '{}' does not support the Responses API",
-            self.name()
-        )))
     }
 }

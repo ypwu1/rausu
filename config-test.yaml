@@ -1,0 +1,14 @@
+server:
+  host: 127.0.0.1
+  port: 4000
+
+logging:
+  level: debug
+  format: pretty
+
+models:
+  - name: claude-sonnet-4-20250514
+    providers:
+      - provider: claude-subscription
+        model: claude-sonnet-4-20250514
+        token_source: auto

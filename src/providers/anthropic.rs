@@ -381,20 +381,22 @@ impl Provider for AnthropicProvider {
         &self,
         body: serde_json::Value,
         _is_stream: bool,
+        client_betas: Option<String>,
     ) -> Result<reqwest::Response, super::ProviderError> {
         debug!(
             model = %body.get("model").and_then(|v| v.as_str()).unwrap_or("unknown"),
             "Forwarding Messages API request via anthropic"
         );
-        let response = self
+        let mut builder = self
             .client
             .post(ANTHROPIC_API_URL)
             .header("x-api-key", &self.api_key)
             .header("anthropic-version", ANTHROPIC_VERSION)
-            .header("content-type", "application/json")
-            .json(&body)
-            .send()
-            .await?;
+            .header("content-type", "application/json");
+        if let Some(betas) = client_betas {
+            builder = builder.header("anthropic-beta", betas);
+        }
+        let response = builder.json(&body).send().await?;
         Ok(response)
     }
 }

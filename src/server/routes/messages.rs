@@ -3,7 +3,7 @@
 use axum::{
     body::Body,
     extract::State,
-    http::StatusCode,
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     Json,
 };
@@ -19,7 +19,18 @@ use crate::server::AppState;
 /// to the configured `anthropic` or `claude-subscription` provider, injecting
 /// the appropriate authentication headers. The response (streaming or not) is
 /// byte-proxied back to the client without modification.
-pub async fn messages(State(state): State<AppState>, Json(mut body): Json<Value>) -> Response {
+pub async fn messages(
+    State(state): State<AppState>,
+    req_headers: HeaderMap,
+    Json(mut body): Json<Value>,
+) -> Response {
+    // Forward the client's anthropic-beta header so features like context_management
+    // (added in Claude Code 2.1.87+) are accepted by the upstream API.
+    let client_betas = req_headers
+        .get("anthropic-beta")
+        .and_then(|v| v.to_str().ok())
+        .map(String::from);
+
     let model_name = match body.get("model").and_then(Value::as_str) {
         Some(m) => m.to_string(),
         None => {
@@ -85,7 +96,7 @@ pub async fn messages(State(state): State<AppState>, Json(mut body): Json<Value>
     // Replace the virtual model name with the upstream model name before forwarding.
     body["model"] = Value::String(provider_model);
 
-    let upstream = match provider.proxy_messages(body, is_stream).await {
+    let upstream = match provider.proxy_messages(body, is_stream, client_betas).await {
         Ok(r) => r,
         Err(e) => {
             error!(error = %e, provider = %provider_name, "Messages proxy error");
@@ -198,6 +209,7 @@ mod tests {
             &self,
             _body: serde_json::Value,
             _is_stream: bool,
+            _client_betas: Option<String>,
         ) -> Result<reqwest::Response, ProviderError> {
             let http_resp = axum::http::Response::builder()
                 .status(self.upstream_status)
