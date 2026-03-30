@@ -6,6 +6,7 @@ use async_trait::async_trait;
 use futures::Stream;
 use futures::StreamExt;
 use reqwest::Client;
+use serde_json::Value;
 use tracing::{debug, error};
 
 use crate::schema::chat::{
@@ -124,6 +125,36 @@ impl Provider for OpenAiProvider {
         });
 
         Ok(Box::pin(chunk_stream))
+    }
+
+    async fn proxy_responses(
+        &self,
+        body: Value,
+        _is_stream: bool,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let url = format!("{}/responses", self.base_url);
+        debug!(url = %url, "Sending passthrough Responses API request via openai");
+
+        let response = self
+            .client
+            .post(&url)
+            .bearer_auth(&self.api_key)
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let status_code = status.as_u16();
+            let msg = response.text().await.unwrap_or_default();
+            error!(status = status_code, body = %msg, "openai responses proxy error");
+            return Err(ProviderError::ProviderResponse {
+                status: status_code,
+                message: msg,
+            });
+        }
+
+        Ok(response)
     }
 
     fn models(&self) -> Vec<ModelInfo> {

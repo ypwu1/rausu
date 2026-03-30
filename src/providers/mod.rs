@@ -99,8 +99,9 @@ pub trait Provider: Send + Sync {
 
     /// Forward a raw OpenAI Responses API request and return the upstream response.
     ///
-    /// Only `chatgpt-subscription` overrides this for passthrough to the
-    /// ChatGPT Responses API backend. All others return [`ProviderError::Unsupported`].
+    /// Providers that speak the Responses API (e.g. `openai`, `chatgpt-subscription`)
+    /// override this method. All others return [`ProviderError::Unsupported`] by default,
+    /// which the route translates to a 405 response.
     async fn proxy_responses(
         &self,
         _body: serde_json::Value,

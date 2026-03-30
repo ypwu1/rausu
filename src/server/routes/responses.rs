@@ -77,19 +77,6 @@ async fn handle_responses(state: AppState, body: &mut Value) -> Response {
         }
     };
 
-    // Only providers that speak the Responses API are allowed here.
-    if provider_name != "chatgpt-subscription" {
-        return (
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::invalid_request(format!(
-                "Provider '{}' does not support the Responses API. \
-                 Use /v1/chat/completions instead.",
-                provider_name
-            ))),
-        )
-            .into_response();
-    }
-
     // Resolve the provider instance.
     let provider = match state.providers.iter().find(|p| p.name() == provider_name) {
         Some(p) => p,
@@ -151,7 +138,7 @@ mod tests {
     };
     use crate::server::AppState;
 
-    /// A stub provider that only knows its name and exposes no real functionality.
+    /// A stub provider with no capabilities — `proxy_responses` uses the default (Unsupported).
     struct StubProvider {
         provider_name: &'static str,
     }
@@ -183,6 +170,52 @@ mod tests {
             Err(ProviderError::Unsupported("stub".to_string()))
         }
         // proxy_responses uses the default (Unsupported) implementation.
+    }
+
+    /// A stub provider that claims Responses API capability by returning a synthetic 200.
+    struct ResponsesCapableStubProvider {
+        provider_name: &'static str,
+    }
+
+    #[async_trait]
+    impl Provider for ResponsesCapableStubProvider {
+        fn name(&self) -> &str {
+            self.provider_name
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            vec![]
+        }
+
+        async fn chat_completions(
+            &self,
+            _req: ChatCompletionRequest,
+        ) -> Result<ChatCompletionResponse, ProviderError> {
+            Err(ProviderError::Unsupported("stub".to_string()))
+        }
+
+        async fn chat_completions_stream(
+            &self,
+            _req: ChatCompletionRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<ChatCompletionChunk, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            Err(ProviderError::Unsupported("stub".to_string()))
+        }
+
+        async fn proxy_responses(
+            &self,
+            _body: serde_json::Value,
+            _is_stream: bool,
+        ) -> Result<reqwest::Response, ProviderError> {
+            let http_resp = axum::http::Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .body(bytes::Bytes::from(r#"{"id":"resp_test"}"#))
+                .unwrap();
+            Ok(reqwest::Response::from(http_resp))
+        }
     }
 
     fn make_app(
@@ -230,9 +263,52 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_non_responses_provider_returns_400() {
+    async fn test_unsupported_provider_returns_405() {
+        // StubProvider does not override proxy_responses, so it returns Unsupported → 405.
         let app = make_app(
             vec![Box::new(StubProvider {
+                provider_name: "anthropic",
+            })],
+            vec![(
+                "claude-3".to_string(),
+                "anthropic".to_string(),
+                "claude-3-haiku".to_string(),
+            )],
+        );
+        let resp = post_json(
+            app,
+            "/v1/responses",
+            r#"{"model": "claude-3", "input": "Hello"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn test_chatgpt_subscription_provider_returns_200() {
+        let app = make_app(
+            vec![Box::new(ResponsesCapableStubProvider {
+                provider_name: "chatgpt-subscription",
+            })],
+            vec![(
+                "gpt-5.4".to_string(),
+                "chatgpt-subscription".to_string(),
+                "gpt-5.4".to_string(),
+            )],
+        );
+        let resp = post_json(
+            app,
+            "/v1/responses",
+            r#"{"model": "gpt-5.4", "input": "Hello"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_openai_provider_returns_200() {
+        let app = make_app(
+            vec![Box::new(ResponsesCapableStubProvider {
                 provider_name: "openai",
             })],
             vec![(
@@ -247,7 +323,7 @@ mod tests {
             r#"{"model": "gpt-4o", "input": "Hello"}"#,
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
