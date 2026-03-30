@@ -12,7 +12,7 @@ use axum::{
     Json,
 };
 use serde_json::Value;
-use tracing::{error, warn};
+use tracing::{error, info, warn};
 
 use crate::schema::error::ErrorResponse;
 use crate::server::AppState;
@@ -105,11 +105,37 @@ async fn handle_responses(state: AppState, body: &mut Value) -> Response {
 
     // Byte-proxy the upstream response — no parsing or rewriting.
     let upstream_status = upstream.status();
-    let content_type = if is_stream {
-        "text/event-stream"
+
+    // Preserve content-type from upstream if present; fall back to a sensible default.
+    // For error responses the upstream sends JSON regardless of the stream flag.
+    let content_type = upstream
+        .headers()
+        .get(axum::http::header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or(if is_stream {
+            "text/event-stream"
+        } else {
+            "application/json"
+        })
+        .to_string();
+
+    if upstream_status.is_success() {
+        info!(
+            model = %model_name,
+            provider = %provider_name,
+            status = upstream_status.as_u16(),
+            stream = is_stream,
+            "Responses proxy succeeded"
+        );
     } else {
-        "application/json"
-    };
+        warn!(
+            model = %model_name,
+            provider = %provider_name,
+            status = upstream_status.as_u16(),
+            stream = is_stream,
+            "Upstream returned non-2xx for responses proxy"
+        );
+    }
 
     (
         upstream_status,
@@ -324,6 +350,105 @@ mod tests {
         )
         .await;
         assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// A stub provider that returns a synthetic upstream error (e.g. 429 rate limit).
+    struct UpstreamErrorStubProvider {
+        provider_name: &'static str,
+        upstream_status: u16,
+    }
+
+    #[async_trait]
+    impl Provider for UpstreamErrorStubProvider {
+        fn name(&self) -> &str {
+            self.provider_name
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            vec![]
+        }
+
+        async fn chat_completions(
+            &self,
+            _req: ChatCompletionRequest,
+        ) -> Result<ChatCompletionResponse, ProviderError> {
+            Err(ProviderError::Unsupported("stub".to_string()))
+        }
+
+        async fn chat_completions_stream(
+            &self,
+            _req: ChatCompletionRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<ChatCompletionChunk, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            Err(ProviderError::Unsupported("stub".to_string()))
+        }
+
+        async fn proxy_responses(
+            &self,
+            _body: serde_json::Value,
+            _is_stream: bool,
+        ) -> Result<reqwest::Response, ProviderError> {
+            let http_resp = axum::http::Response::builder()
+                .status(self.upstream_status)
+                .header("content-type", "application/json")
+                .body(bytes::Bytes::from(r#"{"error":"upstream error"}"#))
+                .unwrap();
+            Ok(reqwest::Response::from(http_resp))
+        }
+    }
+
+    #[tokio::test]
+    async fn test_upstream_error_status_is_proxied_through() {
+        // Upstream returns 429; the route must proxy it through, not replace with 500.
+        let app = make_app(
+            vec![Box::new(UpstreamErrorStubProvider {
+                provider_name: "openai",
+                upstream_status: 429,
+            })],
+            vec![(
+                "gpt-4o".to_string(),
+                "openai".to_string(),
+                "gpt-4o".to_string(),
+            )],
+        );
+        let resp = post_json(
+            app,
+            "/v1/responses",
+            r#"{"model": "gpt-4o", "input": "Hello"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[tokio::test]
+    async fn test_upstream_content_type_is_preserved() {
+        // When upstream sets a specific content-type, it should be forwarded.
+        let app = make_app(
+            vec![Box::new(ResponsesCapableStubProvider {
+                provider_name: "openai",
+            })],
+            vec![(
+                "gpt-4o".to_string(),
+                "openai".to_string(),
+                "gpt-4o".to_string(),
+            )],
+        );
+        let resp = post_json(
+            app,
+            "/v1/responses",
+            r#"{"model": "gpt-4o", "input": "Hello"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(ct, "application/json");
     }
 
     #[tokio::test]

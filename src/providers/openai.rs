@@ -30,7 +30,10 @@ impl OpenAiProvider {
     /// Create a new OpenAI provider instance.
     pub fn new(api_key: String, base_url: Option<String>, model_names: Vec<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .build()
+                .expect("failed to build openai HTTP client"),
             api_key,
             base_url: base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
             model_names,

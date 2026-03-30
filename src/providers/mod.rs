@@ -45,14 +45,61 @@ pub enum ProviderError {
 
 impl ProviderError {
     /// Map the error to an appropriate HTTP status code.
+    ///
+    /// `Http` errors are mapped to 504 on timeout (upstream did not respond in time)
+    /// and 502 for all other transport failures.
     pub fn status_code(&self) -> u16 {
         match self {
             ProviderError::ProviderResponse { status, .. } => *status,
-            ProviderError::Http(_) => 502,
+            ProviderError::Http(e) => {
+                if e.is_timeout() {
+                    504
+                } else {
+                    502
+                }
+            }
             ProviderError::Serialisation(_) => 500,
             ProviderError::Unsupported(_) => 405,
             ProviderError::Internal(_) => 500,
         }
+    }
+}
+
+// ── Unit tests ────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_provider_response_preserves_upstream_status() {
+        let e = ProviderError::ProviderResponse {
+            status: 429,
+            message: "rate limited".to_string(),
+        };
+        assert_eq!(e.status_code(), 429);
+    }
+
+    #[test]
+    fn test_serialisation_error_is_500() {
+        let json_err = serde_json::from_str::<i32>("not-a-number").unwrap_err();
+        assert_eq!(ProviderError::Serialisation(json_err).status_code(), 500);
+    }
+
+    #[test]
+    fn test_unsupported_error_is_405() {
+        assert_eq!(
+            ProviderError::Unsupported("not supported".to_string()).status_code(),
+            405
+        );
+    }
+
+    #[test]
+    fn test_internal_error_is_500() {
+        assert_eq!(
+            ProviderError::Internal("something broke".to_string()).status_code(),
+            500
+        );
     }
 }
 

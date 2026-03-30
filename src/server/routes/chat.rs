@@ -15,7 +15,7 @@ use crate::schema::error::ErrorResponse;
 use crate::server::AppState;
 
 /// POST /v1/chat/completions — proxy chat completion requests.
-#[instrument(skip(state, req), fields(model = %req.model, stream = req.stream.unwrap_or(false)))]
+#[instrument(skip(state, req), fields(model = %req.model, stream = req.stream.unwrap_or(false), provider = tracing::field::Empty))]
 pub async fn chat_completions(
     State(state): State<AppState>,
     Json(req): Json<ChatCompletionRequest>,
@@ -52,6 +52,8 @@ pub async fn chat_completions(
             }
         }
     };
+
+    tracing::Span::current().record("provider", provider_name.as_str());
 
     // Resolve the upstream provider
     let provider = match state.providers.iter().find(|p| p.name() == provider_name) {

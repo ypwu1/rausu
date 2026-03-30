@@ -93,7 +93,10 @@ impl ChatGptSubscriptionProvider {
     /// Create a new provider instance.
     pub fn new(token_manager: Arc<ChatGptOAuthTokenManager>, model_names: Vec<String>) -> Self {
         Self {
-            client: Client::new(),
+            client: Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(10))
+                .build()
+                .expect("failed to build chatgpt-subscription HTTP client"),
             token_manager,
             model_names,
             user_agent: build_user_agent(),
