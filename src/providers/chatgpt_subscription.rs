@@ -304,6 +304,10 @@ fn translate_request(req: &ChatCompletionRequest) -> ResponsesRequest {
         _ => "auto".to_string(),
     };
 
+    // ChatGPT Codex Responses API requires `instructions` to be non-null.
+    // Default to a minimal system prompt when the caller doesn't provide one.
+    let instructions = instructions.or_else(|| Some("You are a helpful assistant.".to_string()));
+
     ResponsesRequest {
         model: req.model.clone(),
         input,
@@ -768,7 +772,9 @@ mod tests {
         }];
         let req = make_request(messages);
         let resp_req = translate_request(&req);
-        assert!(resp_req.instructions.is_none());
+        // When no system message is provided, a default instruction is injected
+        // because the ChatGPT Codex Responses API requires `instructions` to be non-null.
+        assert_eq!(resp_req.instructions, Some("You are a helpful assistant.".to_string()));
         assert_eq!(resp_req.input.len(), 1);
     }
 
