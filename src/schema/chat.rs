@@ -143,8 +143,12 @@ pub struct ChatCompletionResponse {
     /// Unique completion ID.
     pub id: String,
     /// Object type: always "chat.completion".
+    /// Some providers (e.g. GitHub Copilot) omit this field.
+    #[serde(default = "default_chat_completion_object")]
     pub object: String,
     /// Unix timestamp of creation.
+    /// Some providers (e.g. GitHub Copilot) omit this field.
+    #[serde(default)]
     pub created: i64,
     /// Model that generated the response.
     pub model: String,
@@ -185,8 +189,12 @@ pub struct ChatCompletionChunk {
     /// Unique completion ID (same across all chunks).
     pub id: String,
     /// Object type: always "chat.completion.chunk".
+    /// Some providers (e.g. GitHub Copilot) omit this field.
+    #[serde(default = "default_chat_completion_chunk_object")]
     pub object: String,
     /// Unix timestamp of creation.
+    /// Some providers (e.g. GitHub Copilot) omit this field.
+    #[serde(default)]
     pub created: i64,
     /// Model that generated the chunk.
     pub model: String,
@@ -214,4 +222,14 @@ pub struct ModelListResponse {
     pub object: String,
     /// Available models.
     pub data: Vec<ModelInfo>,
+}
+
+// ── Default helpers for lenient deserialization ────────────────────────
+
+fn default_chat_completion_object() -> String {
+    "chat.completion".to_string()
+}
+
+fn default_chat_completion_chunk_object() -> String {
+    "chat.completion.chunk".to_string()
 }
