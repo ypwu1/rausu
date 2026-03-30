@@ -49,9 +49,11 @@ models:
         token_source: auto
 
   # ── GitHub Copilot (subscription — no API key required) ─────────────────────
-  # token_source: auto  →  tries GH_TOKEN / GITHUB_TOKEN env vars first,
-  #                        then ~/.config/github-copilot/hosts.json
-  #                        (written by `gh auth login` or the Copilot extension)
+  # Token loaded from ~/.config/github-copilot/hosts.json
+  # (written by `gh auth login` or the Copilot VS Code / JetBrains extension)
+  #
+  # Note: GH_TOKEN / GITHUB_TOKEN env vars are NOT supported — PATs are
+  # incompatible with the Copilot token exchange endpoint.
   #
   # Upstream model names: gpt-4o, claude-3.5-sonnet, o1-mini, etc.
   # (Copilot model availability depends on your subscription tier.)
@@ -59,20 +61,17 @@ models:
     providers:
       - provider: github-copilot
         model: gpt-4o
-        token_source: auto
 
   - name: copilot-claude-sonnet
     providers:
       - provider: github-copilot
         model: claude-3.5-sonnet
-        token_source: auto
 
   # Optional: use a specific hosts.json path
   # - name: copilot-custom
   #   providers:
   #     - provider: github-copilot
   #       model: gpt-4o
-  #       token_source: hosts_file
   #       credentials_path: /path/to/custom/hosts.json
 
   # ── Claude subscription (Pro / Max — no API key required) ────────────────────

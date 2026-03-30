@@ -192,10 +192,10 @@ impl Provider for GitHubCopilotProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::auth::copilot::{CopilotTokenManager, CopilotTokenSource};
+    use crate::auth::copilot::CopilotTokenManager;
 
     fn make_provider(model_names: Vec<&str>) -> GitHubCopilotProvider {
-        let mgr = CopilotTokenManager::new(CopilotTokenSource::Env, None);
+        let mgr = CopilotTokenManager::new(None);
         GitHubCopilotProvider::new(mgr, model_names.into_iter().map(String::from).collect())
     }
 

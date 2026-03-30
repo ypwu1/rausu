@@ -5,9 +5,9 @@
 ## Overview
 
 The `github-copilot` provider lets you route requests through your GitHub Copilot
-subscription without an API key.  Rausu exchanges your GitHub OAuth token for a
-short-lived Copilot API token automatically, then proxies OpenAI-compatible
-chat completions to `https://api.githubcopilot.com`.
+subscription without an API key.  Rausu exchanges your GitHub OAuth device-flow
+token for a short-lived Copilot API token automatically, then proxies
+OpenAI-compatible chat completions to `https://api.githubcopilot.com`.
 
 ## Support matrix
 
@@ -23,12 +23,13 @@ chat completions to `https://api.githubcopilot.com`.
 You need a GitHub account with an active Copilot subscription (Individual, Business,
 or Enterprise).
 
-One of the following must be present:
+The token is loaded from `~/.config/github-copilot/hosts.json`, which is written
+by `gh auth login` or the Copilot VS Code / JetBrains extension.
 
-| Option | Source |
-|---|---|
-| **`GH_TOKEN` / `GITHUB_TOKEN` env var** | Any GitHub OAuth token with `read:user` scope |
-| **`~/.config/github-copilot/hosts.json`** | Written by `gh auth login` or the Copilot VS Code extension |
+> **Note:** Environment variables like `GH_TOKEN` / `GITHUB_TOKEN` are intentionally
+> **not** supported. They often contain PATs (personal access tokens) which are
+> incompatible with the Copilot internal token exchange endpoint. Only device-flow
+> tokens (`ghu_...`) from `hosts.json` are supported.
 
 The `hosts.json` file looks like:
 
@@ -48,9 +49,6 @@ The `hosts.json` file looks like:
 ```bash
 # Using GitHub CLI (recommended):
 gh auth login --scopes read:user
-
-# Or set an env var directly:
-export GH_TOKEN=ghp_yourPersonalAccessToken
 ```
 
 ### 2. Add to config.yaml
@@ -61,13 +59,11 @@ models:
     providers:
       - provider: github-copilot
         model: gpt-4o
-        token_source: auto   # default; can be omitted
 
   - name: copilot-claude-sonnet
     providers:
       - provider: github-copilot
         model: claude-3.5-sonnet
-        token_source: auto
 ```
 
 ### 3. Start Rausu
@@ -95,22 +91,12 @@ curl -s http://localhost:4000/v1/chat/completions \
   providers:
     - provider: github-copilot
       model: <upstream-copilot-model>   # Required
-      token_source: auto                # Optional; default: auto
       credentials_path: /path/to/hosts.json  # Optional; default: ~/.config/github-copilot/hosts.json
 ```
 
-### `token_source` values
-
-| Value | Behaviour |
-|---|---|
-| `auto` (default) | Try `GH_TOKEN` / `GITHUB_TOKEN` env vars, then `hosts.json` |
-| `env` | `GH_TOKEN` or `GITHUB_TOKEN` env var only |
-| `hosts_file` | `hosts.json` only (path from `credentials_path` or default) |
-
 ### `credentials_path`
 
-Overrides the default `~/.config/github-copilot/hosts.json` path.  Only used
-when `token_source` is `hosts_file` or `auto` (fallback).
+Overrides the default `~/.config/github-copilot/hosts.json` path.
 
 ## Upstream model names
 
@@ -132,7 +118,7 @@ Copilot may return `404` or `400` for models not enabled on your plan.
 Token exchange is fully automatic:
 
 ```
-GH OAuth token  →  GET /copilot_internal/v2/token  →  Copilot API token (TTL ~30 min)
+hosts.json (ghu_...)  →  GET /copilot_internal/v2/token  →  Copilot API token (TTL ~30 min)
 ```
 
 Rausu caches the Copilot API token and re-exchanges it 5 minutes before expiry.

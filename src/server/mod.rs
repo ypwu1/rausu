@@ -16,7 +16,7 @@ use tracing::info;
 use std::path::PathBuf;
 
 use crate::auth::chatgpt_oauth::{ChatGptOAuthTokenManager, ChatGptTokenSource};
-use crate::auth::copilot::{CopilotTokenManager, CopilotTokenSource};
+use crate::auth::copilot::CopilotTokenManager;
 use crate::auth::oauth::{OAuthTokenManager, TokenSource};
 use crate::config::AppConfig;
 use crate::providers::{
@@ -296,18 +296,13 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
                 .push(virtual_name.clone());
         }
 
-        for ((token_source_str, credentials_path_str), model_names) in by_source {
-            let token_source = match token_source_str.as_str() {
-                "env" => CopilotTokenSource::Env,
-                "hosts_file" => CopilotTokenSource::HostsFile,
-                _ => CopilotTokenSource::Auto,
-            };
+        for ((_token_source_str, credentials_path_str), model_names) in by_source {
             let hosts_path = if credentials_path_str.is_empty() {
                 None
             } else {
                 Some(PathBuf::from(&credentials_path_str))
             };
-            let token_manager = CopilotTokenManager::new(token_source, hosts_path);
+            let token_manager = CopilotTokenManager::new(hosts_path);
             providers.push(Box::new(GitHubCopilotProvider::new(
                 token_manager,
                 model_names,

@@ -1,20 +1,20 @@
 //! GitHub Copilot token manager.
 //!
 //! Two-step authentication:
-//! 1. Load a GitHub OAuth token (from env var or `hosts.json`).
+//! 1. Load a GitHub OAuth device-flow token (`ghu_...`) from `hosts.json`.
 //! 2. Exchange it for a short-lived Copilot API token via the
 //!    `api.github.com/copilot_internal/v2/token` endpoint.
 //!
 //! Copilot API tokens are cached and re-exchanged automatically when they
 //! approach expiry (within `REFRESH_MARGIN_SECS`).
 //!
-//! # Token sources
+//! # Token source
 //!
-//! | `token_source` | Behaviour |
-//! |----------------|-----------|
-//! | `auto` (default) | Try `GH_TOKEN` / `GITHUB_TOKEN` env vars first, then `hosts.json` |
-//! | `env`          | `GH_TOKEN` or `GITHUB_TOKEN` env var only |
-//! | `hosts_file`   | `~/.config/github-copilot/hosts.json` (or custom path) |
+//! The only supported token source is `~/.config/github-copilot/hosts.json`
+//! (or a custom path via `credentials_path`). Environment variables like
+//! `GH_TOKEN` are intentionally **not** supported because they often contain
+//! PATs (personal access tokens) which are incompatible with the Copilot
+//! internal token exchange endpoint.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -28,9 +28,6 @@ use tracing::{debug, info, warn};
 /// Re-exchange margin — get a new Copilot token 5 minutes before expiry.
 const REFRESH_MARGIN_SECS: i64 = 5 * 60;
 
-/// Environment variables checked for the GitHub OAuth token.
-const GH_TOKEN_ENVS: &[&str] = &["GH_TOKEN", "GITHUB_TOKEN"];
-
 /// Default path to the Copilot hosts file relative to $HOME.
 const DEFAULT_HOSTS_RELATIVE: &str = ".config/github-copilot/hosts.json";
 
@@ -40,19 +37,6 @@ const COPILOT_TOKEN_ENDPOINT: &str =
 
 /// Default Copilot API base URL (used when the token exchange does not return one).
 const DEFAULT_COPILOT_ENDPOINT: &str = "https://api.githubcopilot.com";
-
-// ── Token source ──────────────────────────────────────────────────────────────
-
-/// Determines where the GitHub OAuth token is loaded from.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum CopilotTokenSource {
-    /// Try `GH_TOKEN` / `GITHUB_TOKEN` first, then hosts file.
-    Auto,
-    /// `GH_TOKEN` or `GITHUB_TOKEN` environment variable only.
-    Env,
-    /// `~/.config/github-copilot/hosts.json` (or a custom path).
-    HostsFile,
-}
 
 // ── Wire types ────────────────────────────────────────────────────────────────
 
@@ -110,11 +94,10 @@ impl CachedCopilotToken {
 
 /// Thread-safe GitHub Copilot token manager.
 ///
-/// Loads a GitHub OAuth token from the configured source, exchanges it for a
+/// Loads a GitHub OAuth device-flow token from `hosts.json`, exchanges it for a
 /// Copilot API token, and caches it for re-use until near expiry.
 pub struct CopilotTokenManager {
     client: Client,
-    token_source: CopilotTokenSource,
     /// Optional override for the hosts.json path.
     hosts_path: Option<PathBuf>,
     state: RwLock<Option<CachedCopilotToken>>,
@@ -122,13 +105,14 @@ pub struct CopilotTokenManager {
 
 impl CopilotTokenManager {
     /// Create a new token manager wrapped in an `Arc`.
-    pub fn new(token_source: CopilotTokenSource, hosts_path: Option<PathBuf>) -> Arc<Self> {
+    ///
+    /// `hosts_path` overrides the default `~/.config/github-copilot/hosts.json`.
+    pub fn new(hosts_path: Option<PathBuf>) -> Arc<Self> {
         Arc::new(Self {
             client: Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
                 .build()
                 .expect("failed to build Copilot HTTP client"),
-            token_source,
             hosts_path,
             state: RwLock::new(None),
         })
@@ -170,32 +154,9 @@ impl CopilotTokenManager {
 
     // ── GitHub token loading ──────────────────────────────────────────────────
 
-    /// Load the raw GitHub OAuth token from the configured source.
+    /// Load the raw GitHub OAuth device-flow token from `hosts.json`.
     pub fn load_github_token(&self) -> Result<String> {
-        match &self.token_source {
-            CopilotTokenSource::Env => self.load_from_env(),
-            CopilotTokenSource::HostsFile => self.load_from_hosts_file(),
-            CopilotTokenSource::Auto => {
-                if let Ok(token) = self.load_from_env() {
-                    return Ok(token);
-                }
-                self.load_from_hosts_file()
-            }
-        }
-    }
-
-    /// Load from `GH_TOKEN` or `GITHUB_TOKEN` environment variable.
-    pub fn load_from_env(&self) -> Result<String> {
-        for var in GH_TOKEN_ENVS {
-            if let Ok(val) = std::env::var(var) {
-                if !val.is_empty() {
-                    return Ok(val);
-                }
-            }
-        }
-        anyhow::bail!(
-            "Neither GH_TOKEN nor GITHUB_TOKEN environment variable is set"
-        )
+        self.load_from_hosts_file()
     }
 
     /// Load from `~/.config/github-copilot/hosts.json` (or custom path).
@@ -289,9 +250,6 @@ impl CopilotTokenManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_MUTEX: Mutex<()> = Mutex::new(());
 
     #[test]
     fn test_token_not_expired() {
@@ -325,40 +283,6 @@ mod tests {
     }
 
     #[test]
-    fn test_load_from_env_gh_token() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        std::env::set_var("GH_TOKEN", "test-gh-token");
-        std::env::remove_var("GITHUB_TOKEN");
-
-        let mgr = CopilotTokenManager::new(CopilotTokenSource::Env, None);
-        assert_eq!(mgr.load_from_env().unwrap(), "test-gh-token");
-
-        std::env::remove_var("GH_TOKEN");
-    }
-
-    #[test]
-    fn test_load_from_env_github_token_fallback() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        std::env::remove_var("GH_TOKEN");
-        std::env::set_var("GITHUB_TOKEN", "test-github-token");
-
-        let mgr = CopilotTokenManager::new(CopilotTokenSource::Env, None);
-        assert_eq!(mgr.load_from_env().unwrap(), "test-github-token");
-
-        std::env::remove_var("GITHUB_TOKEN");
-    }
-
-    #[test]
-    fn test_load_from_env_missing() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        std::env::remove_var("GH_TOKEN");
-        std::env::remove_var("GITHUB_TOKEN");
-
-        let mgr = CopilotTokenManager::new(CopilotTokenSource::Env, None);
-        assert!(mgr.load_from_env().is_err());
-    }
-
-    #[test]
     fn test_load_from_hosts_file() {
         let json = serde_json::json!({
             "github.com": {
@@ -370,7 +294,7 @@ mod tests {
         let path = dir.join("rausu_test_copilot_hosts.json");
         std::fs::write(&path, json.to_string()).unwrap();
 
-        let mgr = CopilotTokenManager::new(CopilotTokenSource::HostsFile, Some(path.clone()));
+        let mgr = CopilotTokenManager::new(Some(path.clone()));
         assert_eq!(mgr.load_from_hosts_file().unwrap(), "ghu_test_token_abc");
 
         std::fs::remove_file(path).ok();
@@ -379,7 +303,6 @@ mod tests {
     #[test]
     fn test_load_from_hosts_file_missing() {
         let mgr = CopilotTokenManager::new(
-            CopilotTokenSource::HostsFile,
             Some(PathBuf::from("/nonexistent/hosts.json")),
         );
         assert!(mgr.load_from_hosts_file().is_err());
@@ -392,22 +315,10 @@ mod tests {
         let path = dir.join("rausu_test_copilot_hosts_nogithub.json");
         std::fs::write(&path, json.to_string()).unwrap();
 
-        let mgr = CopilotTokenManager::new(CopilotTokenSource::HostsFile, Some(path.clone()));
+        let mgr = CopilotTokenManager::new(Some(path.clone()));
         assert!(mgr.load_from_hosts_file().is_err());
 
         std::fs::remove_file(path).ok();
-    }
-
-    #[test]
-    fn test_auto_prefers_env_over_hosts_file() {
-        let _guard = ENV_MUTEX.lock().unwrap();
-        std::env::set_var("GH_TOKEN", "env-token");
-
-        let mgr = CopilotTokenManager::new(CopilotTokenSource::Auto, None);
-        // Auto should return the env token without trying hosts file.
-        assert_eq!(mgr.load_github_token().unwrap(), "env-token");
-
-        std::env::remove_var("GH_TOKEN");
     }
 
     #[test]
@@ -417,7 +328,7 @@ mod tests {
 
     #[test]
     fn test_hosts_file_path_default() {
-        let mgr = CopilotTokenManager::new(CopilotTokenSource::Auto, None);
+        let mgr = CopilotTokenManager::new(None);
         let path = mgr.hosts_file_path();
         assert!(path.is_some());
         let path = path.unwrap();
