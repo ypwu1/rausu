@@ -17,6 +17,7 @@ pub mod chatgpt_subscription;
 pub mod claude_subscription;
 pub mod github_copilot;
 pub mod openai;
+pub mod vertex_ai;
 
 /// Error type for provider operations.
 #[derive(Debug, Error)]

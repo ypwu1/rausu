@@ -18,11 +18,12 @@ use std::path::PathBuf;
 use crate::auth::chatgpt_oauth::{ChatGptOAuthTokenManager, ChatGptTokenSource};
 use crate::auth::copilot::CopilotTokenManager;
 use crate::auth::oauth::{OAuthTokenManager, TokenSource};
+use crate::auth::vertex::VertexTokenManager;
 use crate::config::AppConfig;
 use crate::providers::{
     anthropic::AnthropicProvider, chatgpt_subscription::ChatGptSubscriptionProvider,
     claude_subscription::ClaudeSubscriptionProvider, github_copilot::GitHubCopilotProvider,
-    openai::OpenAiProvider, Provider,
+    openai::OpenAiProvider, vertex_ai::VertexAiProvider, Provider,
 };
 use crate::schema::chat::ModelInfo;
 
@@ -114,6 +115,8 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
     let mut chatgpt_sub_models: Vec<(String, String, String, Option<String>)> = Vec::new();
     // (virtual_name, provider_model, token_source_str, credentials_path)
     let mut copilot_models: Vec<(String, String, String, Option<String>)> = Vec::new();
+    // (virtual_name, provider_model, project_id, location, credentials_path)
+    let mut vertex_models: Vec<(String, String, String, String, Option<String>)> = Vec::new();
 
     for model_cfg in &config.models {
         for deployment in &model_cfg.providers {
@@ -175,6 +178,25 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
                     model_registry.push((
                         model_cfg.name.clone(),
                         "github-copilot".to_string(),
+                        deployment.model.clone(),
+                    ));
+                }
+                "vertex-ai" => {
+                    let project_id = deployment.project_id.clone().unwrap_or_default();
+                    let location = deployment
+                        .location
+                        .clone()
+                        .unwrap_or_else(|| "us-central1".to_string());
+                    vertex_models.push((
+                        model_cfg.name.clone(),
+                        deployment.model.clone(),
+                        project_id,
+                        location,
+                        deployment.credentials_path.clone(),
+                    ));
+                    model_registry.push((
+                        model_cfg.name.clone(),
+                        "vertex-ai".to_string(),
                         deployment.model.clone(),
                     ));
                 }
@@ -304,6 +326,35 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
             let token_manager = CopilotTokenManager::new(hosts_path);
             providers.push(Box::new(GitHubCopilotProvider::new(
                 token_manager,
+                model_names,
+            )));
+        }
+    }
+
+    // Create one VertexAiProvider per unique (project_id, location, credentials_path) tuple.
+    if !vertex_models.is_empty() {
+        // Key: (project_id, location, credentials_path)
+        let mut by_config: std::collections::HashMap<(String, String, String), Vec<String>> =
+            std::collections::HashMap::new();
+        for (virtual_name, _model, project_id, location, credentials_path) in &vertex_models {
+            let path_key = credentials_path.clone().unwrap_or_default();
+            by_config
+                .entry((project_id.clone(), location.clone(), path_key))
+                .or_default()
+                .push(virtual_name.clone());
+        }
+
+        for ((project_id, location, credentials_path_str), model_names) in by_config {
+            let credentials_path = if credentials_path_str.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(&credentials_path_str))
+            };
+            let token_manager = VertexTokenManager::new(credentials_path);
+            providers.push(Box::new(VertexAiProvider::new(
+                token_manager,
+                project_id,
+                location,
                 model_names,
             )));
         }
