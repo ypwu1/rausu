@@ -32,6 +32,7 @@ tower-http = { version = "0.6", features = ["cors", "trace"] }
 bytes = "1"
 dirs = "5"
 base64 = "0.22"
+jsonwebtoken = { version = "9", features = ["use_pem"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
