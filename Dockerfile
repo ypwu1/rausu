@@ -1,6 +1,11 @@
 # ── Builder stage ─────────────────────────────────────────────────────────────
 FROM rust:1.87-slim AS builder
 
+# ring crate (used by rustls/jsonwebtoken) needs a C compiler and perl
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential perl pkg-config \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 # Cache dependencies
