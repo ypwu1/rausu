@@ -774,7 +774,10 @@ mod tests {
         let resp_req = translate_request(&req);
         // When no system message is provided, a default instruction is injected
         // because the ChatGPT Codex Responses API requires `instructions` to be non-null.
-        assert_eq!(resp_req.instructions, Some("You are a helpful assistant.".to_string()));
+        assert_eq!(
+            resp_req.instructions,
+            Some("You are a helpful assistant.".to_string())
+        );
         assert_eq!(resp_req.input.len(), 1);
     }
 

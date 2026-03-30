@@ -32,8 +32,7 @@ const REFRESH_MARGIN_SECS: i64 = 5 * 60;
 const DEFAULT_HOSTS_RELATIVE: &str = ".config/github-copilot/hosts.json";
 
 /// GitHub API endpoint for exchanging a GitHub token for a Copilot API token.
-const COPILOT_TOKEN_ENDPOINT: &str =
-    "https://api.github.com/copilot_internal/v2/token";
+const COPILOT_TOKEN_ENDPOINT: &str = "https://api.github.com/copilot_internal/v2/token";
 
 /// Default Copilot API base URL (used when the token exchange does not return one).
 const DEFAULT_COPILOT_ENDPOINT: &str = "https://api.githubcopilot.com";
@@ -173,8 +172,8 @@ impl CopilotTokenManager {
             )
         })?;
 
-        let hosts: HostsFile = serde_json::from_str(&contents)
-            .context("Failed to parse GitHub Copilot hosts.json")?;
+        let hosts: HostsFile =
+            serde_json::from_str(&contents).context("Failed to parse GitHub Copilot hosts.json")?;
 
         hosts
             .github
@@ -202,10 +201,7 @@ impl CopilotTokenManager {
             .get(COPILOT_TOKEN_ENDPOINT)
             .header("Authorization", format!("token {}", github_token))
             .header("Accept", "application/json")
-            .header(
-                "User-Agent",
-                "rausu/0.1 (github-copilot-provider)",
-            )
+            .header("User-Agent", "rausu/0.1 (github-copilot-provider)")
             .send()
             .await
             .context("Failed to reach GitHub Copilot token endpoint")?;
@@ -302,9 +298,7 @@ mod tests {
 
     #[test]
     fn test_load_from_hosts_file_missing() {
-        let mgr = CopilotTokenManager::new(
-            Some(PathBuf::from("/nonexistent/hosts.json")),
-        );
+        let mgr = CopilotTokenManager::new(Some(PathBuf::from("/nonexistent/hosts.json")));
         assert!(mgr.load_from_hosts_file().is_err());
     }
 

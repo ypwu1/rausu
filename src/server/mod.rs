@@ -21,8 +21,7 @@ use crate::auth::oauth::{OAuthTokenManager, TokenSource};
 use crate::config::AppConfig;
 use crate::providers::{
     anthropic::AnthropicProvider, chatgpt_subscription::ChatGptSubscriptionProvider,
-    claude_subscription::ClaudeSubscriptionProvider,
-    github_copilot::GitHubCopilotProvider,
+    claude_subscription::ClaudeSubscriptionProvider, github_copilot::GitHubCopilotProvider,
     openai::OpenAiProvider, Provider,
 };
 use crate::schema::chat::ModelInfo;
