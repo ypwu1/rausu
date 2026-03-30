@@ -16,11 +16,14 @@ use tracing::info;
 use std::path::PathBuf;
 
 use crate::auth::chatgpt_oauth::{ChatGptOAuthTokenManager, ChatGptTokenSource};
+use crate::auth::copilot::{CopilotTokenManager, CopilotTokenSource};
 use crate::auth::oauth::{OAuthTokenManager, TokenSource};
 use crate::config::AppConfig;
 use crate::providers::{
     anthropic::AnthropicProvider, chatgpt_subscription::ChatGptSubscriptionProvider,
-    claude_subscription::ClaudeSubscriptionProvider, openai::OpenAiProvider, Provider,
+    claude_subscription::ClaudeSubscriptionProvider,
+    github_copilot::GitHubCopilotProvider,
+    openai::OpenAiProvider, Provider,
 };
 use crate::schema::chat::ModelInfo;
 
@@ -110,6 +113,8 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
     let mut claude_sub_models: Vec<(String, String, String, Option<String>)> = Vec::new();
     // (virtual_name, provider_model, token_source_str, credentials_path)
     let mut chatgpt_sub_models: Vec<(String, String, String, Option<String>)> = Vec::new();
+    // (virtual_name, provider_model, token_source_str, credentials_path)
+    let mut copilot_models: Vec<(String, String, String, Option<String>)> = Vec::new();
 
     for model_cfg in &config.models {
         for deployment in &model_cfg.providers {
@@ -158,6 +163,19 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
                     model_registry.push((
                         model_cfg.name.clone(),
                         "chatgpt-subscription".to_string(),
+                        deployment.model.clone(),
+                    ));
+                }
+                "github-copilot" => {
+                    copilot_models.push((
+                        model_cfg.name.clone(),
+                        deployment.model.clone(),
+                        deployment.token_source.clone().unwrap_or_default(),
+                        deployment.credentials_path.clone(),
+                    ));
+                    model_registry.push((
+                        model_cfg.name.clone(),
+                        "github-copilot".to_string(),
                         deployment.model.clone(),
                     ));
                 }
@@ -260,6 +278,37 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
             };
             let token_manager = ChatGptOAuthTokenManager::new(token_source, credentials_path);
             providers.push(Box::new(ChatGptSubscriptionProvider::new(
+                token_manager,
+                model_names,
+            )));
+        }
+    }
+
+    // Create one GitHubCopilotProvider per unique (token_source, credentials_path) pair.
+    if !copilot_models.is_empty() {
+        let mut by_source: std::collections::HashMap<(String, String), Vec<String>> =
+            std::collections::HashMap::new();
+        for (virtual_name, _model, token_source_str, credentials_path) in &copilot_models {
+            let path_key = credentials_path.clone().unwrap_or_default();
+            by_source
+                .entry((token_source_str.clone(), path_key))
+                .or_default()
+                .push(virtual_name.clone());
+        }
+
+        for ((token_source_str, credentials_path_str), model_names) in by_source {
+            let token_source = match token_source_str.as_str() {
+                "env" => CopilotTokenSource::Env,
+                "hosts_file" => CopilotTokenSource::HostsFile,
+                _ => CopilotTokenSource::Auto,
+            };
+            let hosts_path = if credentials_path_str.is_empty() {
+                None
+            } else {
+                Some(PathBuf::from(&credentials_path_str))
+            };
+            let token_manager = CopilotTokenManager::new(token_source, hosts_path);
+            providers.push(Box::new(GitHubCopilotProvider::new(
                 token_manager,
                 model_names,
             )));

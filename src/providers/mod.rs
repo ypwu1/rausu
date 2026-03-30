@@ -15,6 +15,7 @@ use crate::schema::chat::{
 pub mod anthropic;
 pub mod chatgpt_subscription;
 pub mod claude_subscription;
+pub mod github_copilot;
 pub mod openai;
 
 /// Error type for provider operations.
