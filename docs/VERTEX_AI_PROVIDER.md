@@ -10,15 +10,15 @@ The `vertex-ai` provider routes OpenAI-compatible chat completions through Googl
 
 | Endpoint | Support |
 |---|---|
-| `POST /v1/chat/completions` | ✅ (streaming + non-streaming) |
+| `POST /v1/chat/completions` | ✅ (streaming + non-streaming) — Gemini models |
 | `GET /v1/models` | ✅ lists configured model names |
-| `POST /v1/messages` | ❌ Use `claude-subscription` for Anthropic Messages |
+| `POST /v1/messages` | ✅ (streaming + non-streaming) — Claude models only |
 | `POST /v1/responses` | ❌ Use `openai` or `chatgpt-subscription` |
 
 ## Prerequisites
 
 1. A GCP project with the **Vertex AI API** enabled
-2. Claude models or Gemini models enabled in [Model Garden](https://console.cloud.google.com/vertex-ai/model-garden)
+2. Gemini and/or Claude models enabled in [Model Garden](https://console.cloud.google.com/vertex-ai/model-garden)
 3. One of these authentication methods configured:
    - **Application Default Credentials (ADC)** — via `gcloud auth application-default login`
    - **Service Account JSON** — downloaded from GCP IAM
@@ -108,6 +108,8 @@ export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
 
 **2. Create `config.yaml`**
 
+For **Claude models on Vertex** (native Anthropic Messages API, no format translation):
+
 ```yaml
 server:
   host: 127.0.0.1
@@ -118,8 +120,20 @@ logging:
   format: pretty
 
 models:
-  # Map a model name that Claude Code will request
-  - name: claude-sonnet-4-20250514
+  # Claude on Vertex — /v1/messages requests are proxied transparently
+  - name: claude-sonnet-4-6
+    providers:
+      - provider: vertex-ai
+        model: claude-sonnet-4-6
+        project_id: "your-gcp-project-id"
+        location: "us-east5"
+```
+
+For **Gemini models on Vertex** (OpenAI Chat Completions, with format translation):
+
+```yaml
+models:
+  - name: claude-sonnet-4-20250514   # alias Claude Code recognises
     providers:
       - provider: vertex-ai
         model: gemini-2.5-pro-preview-05-06
@@ -127,7 +141,7 @@ models:
         location: "us-central1"
 ```
 
-> **Tip:** Name the model something Claude Code expects (e.g. `claude-sonnet-4-20250514`) so you don't need to override the model name in Claude Code.
+> **Tip:** Use the exact Claude model ID (e.g. `claude-sonnet-4-6`) as the virtual name so Claude Code works without any extra configuration.
 
 **3. Start Rausu**
 
@@ -140,10 +154,10 @@ models:
 ```bash
 export ANTHROPIC_BASE_URL="http://localhost:4000"
 export ANTHROPIC_API_KEY="fake-key"   # Rausu ignores this, but Claude Code requires it
-claude -p "Hello from Vertex AI via Rausu"
+claude -p "Hello from Claude on Vertex AI via Rausu"
 ```
 
-> **Important:** Claude Code sends requests to `/v1/messages` (Anthropic Messages API), not `/v1/chat/completions`. The Vertex AI provider currently supports `/v1/chat/completions` only. To use Claude Code with Vertex AI through Rausu, you would need a model name that Claude Code requests via the chat completions path, or use a different client that speaks the OpenAI protocol.
+Claude Code sends requests to `/v1/messages`. When the model name starts with `claude-`, the vertex-ai provider proxies the request transparently to the Anthropic publisher endpoint on Vertex AI, injecting GCP OAuth auth.
 
 ### For OpenAI-compatible clients (Codex CLI, curl, SDKs)
 
@@ -185,13 +199,29 @@ docker run \
 - name: <virtual-model-name>
   providers:
     - provider: vertex-ai
-      model: <gemini-model-id>           # Required
+      model: <model-id>                  # Required (Claude or Gemini model ID)
       project_id: <gcp-project-id>       # Required
       location: <gcp-region>             # Required (default: us-central1)
       credentials_path: <path>           # Optional (falls back to env/ADC)
 ```
 
+The provider auto-detects the model type by name:
+- Names starting with `claude-` → Anthropic publisher, `/v1/messages` endpoint
+- All other names → Google publisher, `/v1/chat/completions` endpoint
+
 ### Upstream model names
+
+**Claude models (use with `/v1/messages` / Claude Code)**
+
+| Model ID | Description |
+|---|---|
+| `claude-sonnet-4-6` | Claude Sonnet 4.6 |
+| `claude-opus-4-6` | Claude Opus 4.6 |
+| `claude-haiku-4-5-20251001` | Claude Haiku 4.5 |
+
+Supported locations for Claude on Vertex: `us-east5`, `europe-west1`, `asia-southeast1`. Check [Model Garden](https://console.cloud.google.com/vertex-ai/model-garden) for availability.
+
+**Gemini models (use with `/v1/chat/completions`)**
 
 | Model ID | Description |
 |---|---|
@@ -229,7 +259,6 @@ Rausu automatically translates between OpenAI and Gemini formats:
 
 ## Known limitations
 
-- **No tool/function calling translation** — Gemini's function calling format differs from OpenAI's; left for a future phase.
-- **Text content only** — image/audio parts in messages are silently skipped.
-- **No Claude-on-Vertex** — only Gemini models via `/publishers/google/models/`. For Claude on Vertex, use a native Anthropic provider.
-- **No embeddings, images, or audio endpoints** — only chat completions.
+- **No tool/function calling translation for Gemini** — Gemini's function calling format differs from OpenAI's; left for a future phase.
+- **Text content only for Gemini** — image/audio parts in messages are silently skipped when using the Gemini path.
+- **No embeddings, images, or audio endpoints** — only chat completions and messages.

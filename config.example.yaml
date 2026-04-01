@@ -135,3 +135,27 @@ models:
   #       model: gemini-2.5-pro-preview-05-06
   #       project_id: "${GCP_PROJECT_ID}"
   #       location: global
+
+  # ── Google Vertex AI (Claude models via Anthropic publisher) ─────────────────
+  # Claude on Vertex uses /publishers/anthropic/models/{model}:rawPredict.
+  # No format translation — the Anthropic Messages API body is forwarded as-is.
+  # Auth: same GCP OAuth token as Gemini (no x-api-key needed).
+  #
+  # Supported locations for Claude on Vertex:
+  #   us-east5, europe-west1, asia-southeast1  (check Model Garden for availability)
+  #
+  # Use the exact Claude model ID as the virtual name so Claude Code works
+  # without any extra configuration.
+  - name: claude-sonnet-4-6
+    providers:
+      - provider: vertex-ai
+        model: claude-sonnet-4-6
+        project_id: "${GCP_PROJECT_ID}"
+        location: us-east5
+
+  - name: claude-haiku-4-5-20251001
+    providers:
+      - provider: vertex-ai
+        model: claude-haiku-4-5-20251001
+        project_id: "${GCP_PROJECT_ID}"
+        location: us-east5

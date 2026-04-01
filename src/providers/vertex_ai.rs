@@ -177,6 +177,24 @@ impl VertexAiProvider {
             )
         }
     }
+
+    /// Build the Vertex AI endpoint URL for a Claude model (Anthropic publisher).
+    ///
+    /// - Non-streaming: `…/publishers/anthropic/models/{model}:rawPredict`
+    /// - Streaming:     `…/publishers/anthropic/models/{model}:streamRawPredict`
+    fn claude_endpoint_url(&self, model: &str, action: &str) -> String {
+        if self.location == "global" {
+            format!(
+                "https://aiplatform.googleapis.com/v1/projects/{}/locations/global/publishers/anthropic/models/{}:{}",
+                self.project_id, model, action
+            )
+        } else {
+            format!(
+                "https://{}-aiplatform.googleapis.com/v1/projects/{}/locations/{}/publishers/anthropic/models/{}:{}",
+                self.location, self.project_id, self.location, model, action
+            )
+        }
+    }
 }
 
 // ── Translation helpers ───────────────────────────────────────────────────────
@@ -524,9 +542,68 @@ impl Provider for VertexAiProvider {
                 id: name.clone(),
                 object: "model".to_string(),
                 created: now,
-                owned_by: "google".to_string(),
+                owned_by: if name.starts_with("claude-") {
+                    "anthropic".to_string()
+                } else {
+                    "google".to_string()
+                },
             })
             .collect()
+    }
+
+    /// Proxy a raw Anthropic Messages API request to Claude on Vertex AI.
+    ///
+    /// Only Claude models (names starting with `claude-`) are supported here.
+    /// The request body is forwarded as-is; GCP OAuth replaces the API-key auth.
+    async fn proxy_messages(
+        &self,
+        body: serde_json::Value,
+        is_stream: bool,
+        _client_betas: Option<String>,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let model = body
+            .get("model")
+            .and_then(Value::as_str)
+            .unwrap_or("")
+            .to_string();
+
+        if !model.starts_with("claude-") {
+            return Err(ProviderError::Unsupported(format!(
+                "Model '{}' is not a Claude model; use /v1/chat/completions for Gemini models",
+                model
+            )));
+        }
+
+        let token = self
+            .token_manager
+            .get_token()
+            .await
+            .map_err(|e| ProviderError::Internal(e.to_string()))?;
+
+        let action = if is_stream {
+            "streamRawPredict"
+        } else {
+            "rawPredict"
+        };
+        let url = self.claude_endpoint_url(&model, action);
+
+        debug!(
+            model = %model,
+            url = %url,
+            stream = is_stream,
+            "Forwarding Messages API request to Claude on Vertex AI"
+        );
+
+        let response = self
+            .client
+            .post(&url)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        Ok(response)
     }
 }
 
@@ -883,5 +960,69 @@ mod tests {
         assert_eq!(models[0].id, "gemini-2.5-pro");
         assert_eq!(models[0].owned_by, "google");
         assert_eq!(models[0].object, "model");
+    }
+
+    #[test]
+    fn test_models_owned_by_anthropic_for_claude() {
+        let mgr = VertexTokenManager::new(None);
+        let p = VertexAiProvider::new(
+            mgr,
+            "my-project".to_string(),
+            "us-east5".to_string(),
+            vec![
+                "claude-sonnet-4-6".to_string(),
+                "gemini-2.5-pro".to_string(),
+            ],
+        );
+        let models = p.models();
+        let claude = models.iter().find(|m| m.id == "claude-sonnet-4-6").unwrap();
+        let gemini = models.iter().find(|m| m.id == "gemini-2.5-pro").unwrap();
+        assert_eq!(claude.owned_by, "anthropic");
+        assert_eq!(gemini.owned_by, "google");
+    }
+
+    // ── claude_endpoint_url ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_claude_endpoint_url_regional_raw_predict() {
+        let mgr = VertexTokenManager::new(None);
+        let p = VertexAiProvider::new(
+            mgr,
+            "my-project".to_string(),
+            "us-east5".to_string(),
+            vec![],
+        );
+        let url = p.claude_endpoint_url("claude-sonnet-4-6", "rawPredict");
+        assert_eq!(
+            url,
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/my-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-6:rawPredict"
+        );
+    }
+
+    #[test]
+    fn test_claude_endpoint_url_regional_stream_raw_predict() {
+        let mgr = VertexTokenManager::new(None);
+        let p = VertexAiProvider::new(
+            mgr,
+            "my-project".to_string(),
+            "us-east5".to_string(),
+            vec![],
+        );
+        let url = p.claude_endpoint_url("claude-sonnet-4-6", "streamRawPredict");
+        assert_eq!(
+            url,
+            "https://us-east5-aiplatform.googleapis.com/v1/projects/my-project/locations/us-east5/publishers/anthropic/models/claude-sonnet-4-6:streamRawPredict"
+        );
+    }
+
+    #[test]
+    fn test_claude_endpoint_url_global() {
+        let mgr = VertexTokenManager::new(None);
+        let p = VertexAiProvider::new(mgr, "my-project".to_string(), "global".to_string(), vec![]);
+        let url = p.claude_endpoint_url("claude-haiku-4-5-20251001", "rawPredict");
+        assert_eq!(
+            url,
+            "https://aiplatform.googleapis.com/v1/projects/my-project/locations/global/publishers/anthropic/models/claude-haiku-4-5-20251001:rawPredict"
+        );
     }
 }

@@ -10,15 +10,15 @@
 
 | 端点 | 支持 |
 |---|---|
-| `POST /v1/chat/completions` | ✅（流式 + 非流式） |
+| `POST /v1/chat/completions` | ✅（流式 + 非流式）— Gemini 模型 |
 | `GET /v1/models` | ✅ 列出已配置的模型名 |
-| `POST /v1/messages` | ❌ Anthropic Messages API 请使用 `claude-subscription` |
+| `POST /v1/messages` | ✅（流式 + 非流式）— 仅 Claude 模型 |
 | `POST /v1/responses` | ❌ 请使用 `openai` 或 `chatgpt-subscription` |
 
 ## 前提条件
 
 1. 已启用 **Vertex AI API** 的 GCP 项目
-2. 在 [Model Garden](https://console.cloud.google.com/vertex-ai/model-garden) 中启用了 Gemini 模型
+2. 在 [Model Garden](https://console.cloud.google.com/vertex-ai/model-garden) 中启用了 Gemini 和/或 Claude 模型
 3. 配置了以下认证方式之一：
    - **应用默认凭据 (ADC)** — 通过 `gcloud auth application-default login`
    - **服务账号 JSON** — 从 GCP IAM 下载
@@ -106,6 +106,8 @@ export GOOGLE_APPLICATION_CREDENTIALS="/path/to/service-account.json"
 
 **2. 创建 `config.yaml`**
 
+**Claude 模型（原生 Anthropic Messages API，无需格式转换）：**
+
 ```yaml
 server:
   host: 127.0.0.1
@@ -116,7 +118,20 @@ logging:
   format: pretty
 
 models:
-  - name: claude-sonnet-4-20250514
+  # Claude on Vertex — /v1/messages 请求透明转发
+  - name: claude-sonnet-4-6
+    providers:
+      - provider: vertex-ai
+        model: claude-sonnet-4-6
+        project_id: "your-gcp-project-id"
+        location: "us-east5"
+```
+
+**Gemini 模型（OpenAI Chat Completions，自动格式转换）：**
+
+```yaml
+models:
+  - name: claude-sonnet-4-20250514   # Claude Code 识别的别名
     providers:
       - provider: vertex-ai
         model: gemini-2.5-pro-preview-05-06
@@ -135,10 +150,10 @@ models:
 ```bash
 export ANTHROPIC_BASE_URL="http://localhost:4000"
 export ANTHROPIC_API_KEY="fake-key"   # Rausu 会忽略此值，但 Claude Code 需要它非空
-claude -p "Hello from Vertex AI via Rausu"
+claude -p "Hello from Claude on Vertex AI via Rausu"
 ```
 
-> **注意：** Claude Code 使用 `/v1/messages`（Anthropic Messages API），而 Vertex AI provider 当前只支持 `/v1/chat/completions`。要通过 Rausu 将 Claude Code 连接到 Vertex AI，需要使用 OpenAI 协议的客户端。
+Claude Code 使用 `/v1/messages` 发送请求。当模型名以 `claude-` 开头时，vertex-ai provider 会将请求透明转发到 Vertex AI 的 Anthropic publisher 端点，并注入 GCP OAuth 认证。
 
 ### 适用于 OpenAI 兼容客户端（Codex CLI、curl、SDK）
 
@@ -180,13 +195,29 @@ docker run \
 - name: <虚拟模型名>
   providers:
     - provider: vertex-ai
-      model: <gemini-模型-id>           # 必填
+      model: <模型-id>                  # 必填（Claude 或 Gemini 模型 ID）
       project_id: <gcp-项目-id>         # 必填
       location: <gcp-区域>              # 必填（默认：us-central1）
       credentials_path: <路径>          # 可选（回退到环境变量/ADC）
 ```
 
+provider 根据模型名自动识别类型：
+- 以 `claude-` 开头 → Anthropic publisher，使用 `/v1/messages` 端点
+- 其他名称 → Google publisher，使用 `/v1/chat/completions` 端点
+
 ### 上游模型名
+
+**Claude 模型（配合 `/v1/messages` / Claude Code 使用）**
+
+| 模型 ID | 说明 |
+|---|---|
+| `claude-sonnet-4-6` | Claude Sonnet 4.6 |
+| `claude-opus-4-6` | Claude Opus 4.6 |
+| `claude-haiku-4-5-20251001` | Claude Haiku 4.5 |
+
+Claude on Vertex 支持的区域：`us-east5`、`europe-west1`、`asia-southeast1`。可用性请查看 [Model Garden](https://console.cloud.google.com/vertex-ai/model-garden)。
+
+**Gemini 模型（配合 `/v1/chat/completions` 使用）**
 
 | 模型 ID | 说明 |
 |---|---|
@@ -224,7 +255,6 @@ Rausu 自动在 OpenAI 和 Gemini 格式之间转换：
 
 ## 已知限制
 
-- **不支持工具/函数调用转换** — Gemini 的函数调用格式与 OpenAI 不同，留待后续阶段。
-- **仅支持文本内容** — 消息中的图片/音频部分会被静默跳过。
-- **不支持 Claude-on-Vertex** — 仅支持 `/publishers/google/models/` 下的 Gemini 模型。Claude on Vertex 请使用原生 Anthropic provider。
-- **无 embeddings、images 或 audio 端点** — 仅支持 chat completions。
+- **Gemini 不支持工具/函数调用转换** — Gemini 的函数调用格式与 OpenAI 不同，留待后续阶段。
+- **Gemini 仅支持文本内容** — 使用 Gemini 路径时，消息中的图片/音频部分会被静默跳过。
+- **无 embeddings、images 或 audio 端点** — 仅支持 chat completions 和 messages。

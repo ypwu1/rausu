@@ -68,7 +68,11 @@ pub async fn messages(
     };
 
     // Only providers that speak the Anthropic Messages API are allowed here.
-    if provider_name != "anthropic" && provider_name != "claude-subscription" {
+    let supports_messages = matches!(
+        provider_name.as_str(),
+        "anthropic" | "claude-subscription" | "vertex-ai"
+    );
+    if !supports_messages {
         return (
             StatusCode::BAD_REQUEST,
             Json(ErrorResponse::invalid_request(format!(
