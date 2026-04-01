@@ -587,6 +587,14 @@ impl Provider for VertexAiProvider {
         };
         let url = self.claude_endpoint_url(&model, action);
 
+        // Vertex AI rawPredict requires `anthropic_version` in the request body.
+        // Claude Code sends this as the `anthropic-version` HTTP header, not in
+        // the body, so we inject it here if missing.
+        let mut body = body;
+        if body.get("anthropic_version").is_none() {
+            body["anthropic_version"] = Value::String("vertex-2023-10-16".to_string());
+        }
+
         debug!(
             model = %model,
             url = %url,
