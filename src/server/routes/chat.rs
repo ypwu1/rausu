@@ -24,13 +24,8 @@ pub async fn chat_completions(
     let is_stream = req.stream.unwrap_or(false);
 
     // Find the provider for the requested model
-    let provider_info = state
-        .model_registry
-        .iter()
-        .find(|(virtual_name, _, _)| virtual_name == &model_name);
-
-    let (provider_name, provider_model) = match provider_info {
-        Some((_, pname, pmodel)) => (pname.clone(), pmodel.clone()),
+    let (provider_name, provider_model) = match state.model_registry.get(&model_name) {
+        Some((pname, pmodel)) => (pname.clone(), pmodel.clone()),
         None => {
             // Fall back: try to find any provider that lists this model
             let found = state

@@ -60,6 +60,10 @@ pub struct LoggingConfig {
 pub struct ModelConfig {
     /// Virtual model name exposed to clients.
     pub name: String,
+    /// Optional alternative names that also route to this model entry.
+    /// Useful when clients may send either a short alias or a full versioned ID.
+    #[serde(default)]
+    pub aliases: Option<Vec<String>>,
     /// Provider deployments for this model.
     pub providers: Vec<ProviderDeployment>,
 }

@@ -1,5 +1,6 @@
 //! HTTP server setup and route registration.
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
@@ -42,8 +43,8 @@ use routes::{
 pub struct AppState {
     /// Registered provider instances.
     pub providers: Arc<Vec<Box<dyn Provider>>>,
-    /// All known model configurations (name → provider name mapping).
-    pub model_registry: Arc<Vec<(String, String, String)>>, // (virtual_name, provider_name, provider_model)
+    /// Maps every known name/alias to `(provider_name, provider_model)`.
+    pub model_registry: Arc<HashMap<String, (String, String)>>,
 }
 
 /// The HTTP server.
@@ -95,16 +96,16 @@ impl Server {
     }
 }
 
-/// (virtual_name, provider_name, provider_model) model registry entry.
-type ModelRegistryEntry = (String, String, String);
-
 /// Build provider instances from configuration.
 ///
-/// Returns (providers, model_registry) where model_registry is a list of
-/// (virtual_name, provider_name, provider_model).
-fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegistryEntry>) {
+/// Returns `(providers, model_registry)` where `model_registry` maps every
+/// known name or alias to `(provider_name, provider_model)`.  When two
+/// entries claim the same key the first one wins and a warning is logged.
+fn build_providers(
+    config: &AppConfig,
+) -> (Vec<Box<dyn Provider>>, HashMap<String, (String, String)>) {
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
-    let mut model_registry: Vec<(String, String, String)> = Vec::new();
+    let mut model_registry: HashMap<String, (String, String)> = HashMap::new();
 
     // Collect model names per provider type
     let mut openai_models: Vec<(String, String, String)> = Vec::new(); // (virtual, api_key, model)
@@ -121,14 +122,10 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
     for model_cfg in &config.models {
         for deployment in &model_cfg.providers {
             let api_key = deployment.api_key.clone().unwrap_or_default();
-            match deployment.provider.as_str() {
+            let registry_entry: Option<(String, String)> = match deployment.provider.as_str() {
                 "openai" => {
                     openai_models.push((model_cfg.name.clone(), api_key, deployment.model.clone()));
-                    model_registry.push((
-                        model_cfg.name.clone(),
-                        "openai".to_string(),
-                        deployment.model.clone(),
-                    ));
+                    Some(("openai".to_string(), deployment.model.clone()))
                 }
                 "anthropic" => {
                     anthropic_models.push((
@@ -136,11 +133,7 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
                         api_key,
                         deployment.model.clone(),
                     ));
-                    model_registry.push((
-                        model_cfg.name.clone(),
-                        "anthropic".to_string(),
-                        deployment.model.clone(),
-                    ));
+                    Some(("anthropic".to_string(), deployment.model.clone()))
                 }
                 "claude-subscription" => {
                     claude_sub_models.push((
@@ -149,11 +142,7 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
                         deployment.token_source.clone().unwrap_or_default(),
                         deployment.credentials_path.clone(),
                     ));
-                    model_registry.push((
-                        model_cfg.name.clone(),
-                        "claude-subscription".to_string(),
-                        deployment.model.clone(),
-                    ));
+                    Some(("claude-subscription".to_string(), deployment.model.clone()))
                 }
                 "chatgpt-subscription" => {
                     chatgpt_sub_models.push((
@@ -162,11 +151,7 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
                         deployment.token_source.clone().unwrap_or_default(),
                         deployment.credentials_path.clone(),
                     ));
-                    model_registry.push((
-                        model_cfg.name.clone(),
-                        "chatgpt-subscription".to_string(),
-                        deployment.model.clone(),
-                    ));
+                    Some(("chatgpt-subscription".to_string(), deployment.model.clone()))
                 }
                 "github-copilot" => {
                     copilot_models.push((
@@ -175,11 +160,7 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
                         deployment.token_source.clone().unwrap_or_default(),
                         deployment.credentials_path.clone(),
                     ));
-                    model_registry.push((
-                        model_cfg.name.clone(),
-                        "github-copilot".to_string(),
-                        deployment.model.clone(),
-                    ));
+                    Some(("github-copilot".to_string(), deployment.model.clone()))
                 }
                 "vertex-ai" => {
                     let project_id = deployment.project_id.clone().unwrap_or_default();
@@ -194,14 +175,36 @@ fn build_providers(config: &AppConfig) -> (Vec<Box<dyn Provider>>, Vec<ModelRegi
                         location,
                         deployment.credentials_path.clone(),
                     ));
-                    model_registry.push((
-                        model_cfg.name.clone(),
-                        "vertex-ai".to_string(),
-                        deployment.model.clone(),
-                    ));
+                    Some(("vertex-ai".to_string(), deployment.model.clone()))
                 }
                 other => {
                     tracing::warn!(provider = %other, "Unknown provider type; skipping");
+                    None
+                }
+            };
+
+            if let Some(entry) = registry_entry {
+                if model_registry.contains_key(&model_cfg.name) {
+                    tracing::warn!(
+                        name = %model_cfg.name,
+                        "Duplicate model name in registry; first entry wins"
+                    );
+                } else {
+                    // Also register any declared aliases so they resolve to the same entry.
+                    if let Some(aliases) = &model_cfg.aliases {
+                        for alias in aliases {
+                            if model_registry.contains_key(alias) {
+                                tracing::warn!(
+                                    alias = %alias,
+                                    model = %model_cfg.name,
+                                    "Duplicate alias in registry; skipping"
+                                );
+                            } else {
+                                model_registry.insert(alias.clone(), entry.clone());
+                            }
+                        }
+                    }
+                    model_registry.insert(model_cfg.name.clone(), entry);
                 }
             }
         }
@@ -394,4 +397,81 @@ async fn shutdown_signal() {
 #[allow(dead_code)]
 pub fn collect_model_infos(providers: &[Box<dyn Provider>]) -> Vec<ModelInfo> {
     providers.iter().flat_map(|p| p.models()).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::schema::{
+        AppConfig, LoggingConfig, ModelConfig, ProviderDeployment, ServerConfig,
+    };
+
+    fn stub_deployment(provider: &str, model: &str) -> ProviderDeployment {
+        ProviderDeployment {
+            provider: provider.to_string(),
+            model: model.to_string(),
+            api_key: Some("test".to_string()),
+            base_url: None,
+            token_source: None,
+            credentials_path: None,
+            project_id: None,
+            location: None,
+        }
+    }
+
+    fn minimal_config(models: Vec<ModelConfig>) -> AppConfig {
+        AppConfig {
+            server: ServerConfig::default(),
+            logging: LoggingConfig::default(),
+            models,
+        }
+    }
+
+    #[test]
+    fn test_alias_lookup_resolves_to_same_entry() {
+        let config = minimal_config(vec![ModelConfig {
+            name: "claude-haiku-4-5".to_string(),
+            aliases: Some(vec!["claude-haiku-4-5-20251001".to_string()]),
+            providers: vec![stub_deployment("anthropic", "claude-haiku-4-5-20251001")],
+        }]);
+
+        let (_, registry) = build_providers(&config);
+
+        let primary = registry
+            .get("claude-haiku-4-5")
+            .expect("primary name missing");
+        let alias = registry
+            .get("claude-haiku-4-5-20251001")
+            .expect("alias missing");
+        assert_eq!(primary, alias);
+        assert_eq!(primary.0, "anthropic");
+        assert_eq!(primary.1, "claude-haiku-4-5-20251001");
+    }
+
+    #[test]
+    fn test_duplicate_alias_is_skipped_first_wins() {
+        // Two models both declare the same alias — the first model's alias wins.
+        let config = minimal_config(vec![
+            ModelConfig {
+                name: "model-a".to_string(),
+                aliases: Some(vec!["shared-alias".to_string()]),
+                providers: vec![stub_deployment("anthropic", "model-a-upstream")],
+            },
+            ModelConfig {
+                name: "model-b".to_string(),
+                aliases: Some(vec!["shared-alias".to_string()]),
+                providers: vec![stub_deployment("anthropic", "model-b-upstream")],
+            },
+        ]);
+
+        let (_, registry) = build_providers(&config);
+
+        // Both primary names present
+        assert!(registry.contains_key("model-a"));
+        assert!(registry.contains_key("model-b"));
+
+        // shared-alias resolves to model-a (first wins)
+        let entry = registry.get("shared-alias").expect("shared-alias missing");
+        assert_eq!(entry.1, "model-a-upstream");
+    }
 }

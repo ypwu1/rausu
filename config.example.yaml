@@ -153,9 +153,14 @@ models:
         project_id: "${GCP_PROJECT_ID}"
         location: us-east5
 
-  - name: claude-haiku-4-5-20251001
+  # The `aliases` field lets multiple names route to the same model entry.
+  # Useful when clients may send either a short alias (claude-haiku-4-5) or
+  # the full versioned ID (claude-haiku-4-5-20251001) for the same model.
+  - name: claude-haiku-4-5
+    aliases:
+      - claude-haiku-4-5-20251001
     providers:
       - provider: vertex-ai
-        model: claude-haiku-4-5-20251001
+        model: "claude-haiku-4-5@20251001"
         project_id: "${GCP_PROJECT_ID}"
         location: us-east5

@@ -47,13 +47,8 @@ pub async fn messages(
     let is_stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
 
     // Look up the model in the registry.
-    let provider_info = state
-        .model_registry
-        .iter()
-        .find(|(virtual_name, _, _)| virtual_name == &model_name);
-
-    let (provider_name, provider_model) = match provider_info {
-        Some((_, pname, pmodel)) => (pname.clone(), pmodel.clone()),
+    let (provider_name, provider_model) = match state.model_registry.get(&model_name) {
+        Some((pname, pmodel)) => (pname.clone(), pmodel.clone()),
         None => {
             warn!(model = %model_name, "No provider found for model in /v1/messages");
             return (
@@ -257,9 +252,13 @@ mod tests {
         providers: Vec<Box<dyn Provider>>,
         registry: Vec<(String, String, String)>,
     ) -> Router {
+        let mut map = std::collections::HashMap::new();
+        for (name, pname, pmodel) in registry {
+            map.insert(name, (pname, pmodel));
+        }
         let state = AppState {
             providers: Arc::new(providers),
-            model_registry: Arc::new(registry),
+            model_registry: Arc::new(map),
         };
         Router::new()
             .route("/v1/messages", post(messages))
