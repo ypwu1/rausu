@@ -592,6 +592,9 @@ impl Provider for VertexAiProvider {
         //    an HTTP header instead).
         // 2. `model` must NOT be in the body — the model is specified in the
         //    URL path. Sending it in the body causes 501 UNIMPLEMENTED.
+        // 3. Strip unsupported fields from `cache_control` objects (e.g.
+        //    `scope`) that Claude Code sends but Vertex rejects with
+        //    "Extra inputs are not permitted".
         let mut body = body;
         if body.get("anthropic_version").is_none() {
             body["anthropic_version"] = Value::String("vertex-2023-10-16".to_string());
@@ -600,6 +603,8 @@ impl Provider for VertexAiProvider {
         if let Some(obj) = body.as_object_mut() {
             obj.remove("model");
         }
+        // Strip unsupported fields from cache_control throughout the body.
+        strip_cache_control_extras(&mut body);
 
         debug!(
             model = %model,
@@ -618,6 +623,40 @@ impl Provider for VertexAiProvider {
             .await?;
 
         Ok(response)
+    }
+}
+
+// ── Vertex body sanitisation helpers ──────────────────────────────────────────
+
+/// Recursively strip fields from `cache_control` objects that Vertex AI does
+/// not accept (e.g. `scope`).  Claude Code may send:
+///
+/// ```json
+/// {"cache_control": {"type": "ephemeral", "scope": "turn"}}
+/// ```
+///
+/// Vertex rejects the extra `scope` key with 400 "Extra inputs are not
+/// permitted".  We keep only `type` inside every `cache_control` object we
+/// encounter anywhere in the JSON tree.
+fn strip_cache_control_extras(value: &mut Value) {
+    match value {
+        Value::Object(map) => {
+            if let Some(cc) = map.get_mut("cache_control") {
+                if let Some(cc_obj) = cc.as_object_mut() {
+                    // Keep only the `type` key — everything else is unsupported.
+                    cc_obj.retain(|k, _| k == "type");
+                }
+            }
+            for v in map.values_mut() {
+                strip_cache_control_extras(v);
+            }
+        }
+        Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_cache_control_extras(v);
+            }
+        }
+        _ => {}
     }
 }
 
@@ -1038,5 +1077,50 @@ mod tests {
             url,
             "https://aiplatform.googleapis.com/v1/projects/my-project/locations/global/publishers/anthropic/models/claude-haiku-4-5-20251001:rawPredict"
         );
+    }
+
+    // ── strip_cache_control_extras ────────────────────────────────────────
+
+    #[test]
+    fn test_strip_cache_control_scope() {
+        let mut body = serde_json::json!({
+            "system": [
+                {
+                    "type": "text",
+                    "text": "Hello",
+                    "cache_control": {"type": "ephemeral", "scope": "turn"}
+                }
+            ],
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "Hi",
+                            "cache_control": {"type": "ephemeral", "scope": "session", "extra": true}
+                        }
+                    ]
+                }
+            ]
+        });
+        strip_cache_control_extras(&mut body);
+
+        // scope and extra should be stripped; type should remain
+        let sys_cc = &body["system"][0]["cache_control"];
+        assert_eq!(sys_cc, &serde_json::json!({"type": "ephemeral"}));
+
+        let msg_cc = &body["messages"][0]["content"][0]["cache_control"];
+        assert_eq!(msg_cc, &serde_json::json!({"type": "ephemeral"}));
+    }
+
+    #[test]
+    fn test_strip_cache_control_no_cache_control() {
+        let mut body = serde_json::json!({
+            "messages": [{"role": "user", "content": "hi"}]
+        });
+        let expected = body.clone();
+        strip_cache_control_extras(&mut body);
+        assert_eq!(body, expected);
     }
 }
