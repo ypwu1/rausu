@@ -445,6 +445,10 @@ impl Provider for VertexAiProvider {
         let url = self.endpoint_url(&req.model, "generateContent");
 
         debug!(model = %req.model, url = %url, "Sending non-streaming request to Vertex AI");
+        debug!(
+            request_body = %serde_json::to_string_pretty(&gemini_req).unwrap_or_default(),
+            "Vertex AI Gemini outgoing request payload"
+        );
 
         let response = self
             .client
@@ -465,7 +469,27 @@ impl Provider for VertexAiProvider {
             });
         }
 
-        let gemini_resp: GenerateContentResponse = response.json().await?;
+        let body_bytes = response
+            .bytes()
+            .await
+            .map_err(|e| ProviderError::Internal(e.to_string()))?;
+        let preview = if body_bytes.len() > 4096 {
+            format!(
+                "{}... (truncated, {} bytes total)",
+                String::from_utf8_lossy(&body_bytes[..4096]),
+                body_bytes.len()
+            )
+        } else {
+            String::from_utf8_lossy(&body_bytes).to_string()
+        };
+        debug!(
+            status = status,
+            response_body = %preview,
+            "Vertex AI Gemini upstream response"
+        );
+
+        let gemini_resp: GenerateContentResponse =
+            serde_json::from_slice(&body_bytes).map_err(ProviderError::Serialisation)?;
         Ok(translate_response(gemini_resp, &req.model))
     }
 
@@ -490,6 +514,10 @@ impl Provider for VertexAiProvider {
         );
 
         debug!(model = %req.model, url = %url, "Sending streaming request to Vertex AI");
+        debug!(
+            request_body = %serde_json::to_string_pretty(&gemini_req).unwrap_or_default(),
+            "Vertex AI Gemini outgoing streaming request payload"
+        );
 
         let response = self
             .client
@@ -509,6 +537,12 @@ impl Provider for VertexAiProvider {
                 message: body,
             });
         }
+
+        debug!(
+            status = status,
+            content_type = ?response.headers().get("content-type"),
+            "Vertex AI Gemini upstream streaming response (body not logged)"
+        );
 
         let model = req.model.clone();
         let completion_id = new_completion_id();
@@ -612,6 +646,11 @@ impl Provider for VertexAiProvider {
             stream = is_stream,
             "Forwarding Messages API request to Claude on Vertex AI"
         );
+        debug!(
+            url = %url,
+            request_body = %serde_json::to_string_pretty(&body).unwrap_or_default(),
+            "Vertex AI Claude outgoing request payload"
+        );
 
         let response = self
             .client
@@ -622,7 +661,47 @@ impl Provider for VertexAiProvider {
             .send()
             .await?;
 
-        Ok(response)
+        if !is_stream {
+            let status = response.status();
+            let ct = response
+                .headers()
+                .get("content-type")
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("unknown")
+                .to_string();
+            let body_bytes = response
+                .bytes()
+                .await
+                .map_err(|e| ProviderError::Internal(e.to_string()))?;
+            let preview = if body_bytes.len() > 4096 {
+                format!(
+                    "{}... (truncated, {} bytes total)",
+                    String::from_utf8_lossy(&body_bytes[..4096]),
+                    body_bytes.len()
+                )
+            } else {
+                String::from_utf8_lossy(&body_bytes).to_string()
+            };
+            debug!(
+                status = %status,
+                content_type = %ct,
+                response_body = %preview,
+                "Vertex AI Claude upstream response"
+            );
+            let rebuilt = http::Response::builder()
+                .status(status.as_u16())
+                .header("content-type", ct)
+                .body(body_bytes)
+                .unwrap();
+            Ok(reqwest::Response::from(rebuilt))
+        } else {
+            debug!(
+                status = %response.status().as_u16(),
+                content_type = ?response.headers().get("content-type"),
+                "Vertex AI Claude upstream streaming response (body not logged)"
+            );
+            Ok(response)
+        }
     }
 }
 

@@ -1400,6 +1400,7 @@ dependencies = [
  "config",
  "dirs",
  "futures",
+ "http",
  "jsonwebtoken",
  "reqwest",
  "serde",
