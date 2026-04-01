@@ -1,5 +1,5 @@
 # ── Builder stage ─────────────────────────────────────────────────────────────
-FROM rust:1.87-slim AS builder
+FROM rust:1.88-slim AS builder
 
 # ring crate (used by rustls/jsonwebtoken) needs a C compiler and perl
 RUN apt-get update && apt-get install -y --no-install-recommends \
