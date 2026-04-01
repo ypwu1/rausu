@@ -209,39 +209,96 @@ The provider auto-detects the model type by name:
 - Names starting with `claude-` → Anthropic publisher, `/v1/messages` endpoint
 - All other names → Google publisher, `/v1/chat/completions` endpoint
 
-### Upstream model names
-
-**Claude models (use with `/v1/messages` / Claude Code)**
-
-| Model ID | Description |
-|---|---|
-| `claude-sonnet-4-6` | Claude Sonnet 4.6 |
-| `claude-opus-4-6` | Claude Opus 4.6 |
-| `claude-haiku-4-5-20251001` | Claude Haiku 4.5 |
-
-Supported locations for Claude on Vertex: `us-east5`, `europe-west1`, `asia-southeast1`. Check [Model Garden](https://console.cloud.google.com/vertex-ai/model-garden) for availability.
-
-**Gemini models (use with `/v1/chat/completions`)**
-
-| Model ID | Description |
-|---|---|
-| `gemini-2.5-pro-preview-05-06` | Gemini 2.5 Pro |
-| `gemini-2.0-flash-001` | Gemini 2.0 Flash |
-| `gemini-1.5-pro-002` | Gemini 1.5 Pro |
-| `gemini-1.5-flash-002` | Gemini 1.5 Flash |
-
-Check [Vertex AI Model Garden](https://console.cloud.google.com/vertex-ai/model-garden) for the latest model IDs.
-
 ### Location values
 
 | Value | Description |
 |---|---|
-| `us-central1` | US Central (default, recommended) |
+| `us-central1` | US Central (default, recommended for Gemini) |
+| `us-east5` | US East (recommended for Claude on Vertex) |
+| `europe-west1` | Belgium |
 | `europe-west4` | Netherlands |
 | `asia-southeast1` | Singapore |
 | `global` | Global endpoint (lower latency in some regions) |
 
 See [Vertex AI locations](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations) for the full list.
+
+## Supported Models Reference
+
+> **Key concepts:**
+> - `name` — what the client sends (must match exactly, e.g., Claude Code sends `claude-sonnet-4-6`)
+> - `aliases` — additional names that also route to this config entry
+> - `model` — the actual model ID sent to Vertex AI
+> - Pinned versions on Vertex use `@` (e.g., `claude-haiku-4-5@20251001`), but clients typically send `-` (e.g., `claude-haiku-4-5-20251001`) — use `aliases` to bridge this
+> - Claude models use the `/v1/messages` endpoint (Anthropic Messages API, no format translation)
+> - Gemini models use the `/v1/chat/completions` endpoint (OpenAI-compatible, with format translation)
+> - Region availability varies by model; check [Model Garden](https://console.cloud.google.com/vertex-ai/model-garden) for supported regions
+
+### Claude models (Anthropic publisher, `/v1/messages`)
+
+| Config `name` | Config `aliases` | Config `model` (sent to Vertex) | Vertex Publisher | Notes |
+|---|---|---|---|---|
+| `claude-sonnet-4-6` | | `claude-sonnet-4-6` | anthropic | Latest Sonnet |
+| `claude-opus-4-6` | | `claude-opus-4-6` | anthropic | Latest Opus |
+| `claude-haiku-4-5` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5@20251001` | anthropic | Fastest, cheapest |
+| `claude-sonnet-4-5` | `claude-sonnet-4-5-20250929` | `claude-sonnet-4-5@20250929` | anthropic | Legacy Sonnet |
+| `claude-opus-4-5` | `claude-opus-4-5-20251101` | `claude-opus-4-5@20251101` | anthropic | Legacy Opus |
+| `claude-opus-4-1` | `claude-opus-4-1-20250805` | `claude-opus-4-1@20250805` | anthropic | Legacy |
+| `claude-sonnet-4` | `claude-sonnet-4-20250514` | `claude-sonnet-4@20250514` | anthropic | Legacy |
+| `claude-opus-4` | `claude-opus-4-20250514` | `claude-opus-4@20250514` | anthropic | Legacy |
+| `claude-3-5-haiku` | `claude-3-5-haiku-20241022` | `claude-3-5-haiku@20241022` | anthropic | Deprecated |
+
+Recommended regions for Claude on Vertex: `us-east5`, `europe-west1`, `asia-southeast1`.
+
+### Gemini models (Google publisher, `/v1/chat/completions`)
+
+| Config `name` | Config `model` (sent to Vertex) | Vertex Publisher | Notes |
+|---|---|---|---|
+| `gemini-2.5-pro` | `gemini-2.5-pro` | google | Latest Pro |
+| `gemini-2.5-flash` | `gemini-2.5-flash` | google | Latest Flash |
+| `gemini-2.0-flash` | `gemini-2.0-flash` | google | Previous gen |
+
+Recommended region for Gemini: `us-central1`.
+
+### Complete config example
+
+```yaml
+models:
+  # Claude models (via /v1/messages)
+  - name: claude-sonnet-4-6
+    providers:
+      - provider: vertex-ai
+        model: claude-sonnet-4-6
+        project_id: "my-project"
+        location: "us-east5"
+        credentials_path: /path/to/credentials.json
+
+  - name: claude-opus-4-6
+    providers:
+      - provider: vertex-ai
+        model: claude-opus-4-6
+        project_id: "my-project"
+        location: "us-east5"
+        credentials_path: /path/to/credentials.json
+
+  - name: claude-haiku-4-5
+    aliases:
+      - claude-haiku-4-5-20251001
+    providers:
+      - provider: vertex-ai
+        model: "claude-haiku-4-5@20251001"
+        project_id: "my-project"
+        location: "us-east5"
+        credentials_path: /path/to/credentials.json
+
+  # Gemini models (via /v1/chat/completions)
+  - name: gemini-2.5-pro
+    providers:
+      - provider: vertex-ai
+        model: gemini-2.5-pro
+        project_id: "my-project"
+        location: "us-central1"
+        credentials_path: /path/to/credentials.json
+```
 
 ## Format translation
 

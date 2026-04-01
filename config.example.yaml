@@ -113,39 +113,46 @@ models:
   #
   # location: GCP region (e.g. us-central1, europe-west4) or "global".
   # project_id: your GCP project ID (required).
+  #
+  # Gemini models use /v1/chat/completions (OpenAI-compatible, with format translation).
   - name: gemini-2.5-pro
     providers:
       - provider: vertex-ai
-        model: gemini-2.5-pro-preview-05-06
+        model: gemini-2.5-pro
         project_id: "${GCP_PROJECT_ID}"
         location: us-central1
         # credentials_path: /path/to/service-account.json  # optional
 
-  - name: gemini-2.0-flash
+  - name: gemini-2.5-flash
     providers:
       - provider: vertex-ai
-        model: gemini-2.0-flash-001
+        model: gemini-2.5-flash
         project_id: "${GCP_PROJECT_ID}"
         location: us-central1
 
-  # Global endpoint (lower latency in some regions):
-  # - name: gemini-global
-  #   providers:
-  #     - provider: vertex-ai
-  #       model: gemini-2.5-pro-preview-05-06
-  #       project_id: "${GCP_PROJECT_ID}"
-  #       location: global
+  - name: gemini-2.0-flash
+    providers:
+      - provider: vertex-ai
+        model: gemini-2.0-flash
+        project_id: "${GCP_PROJECT_ID}"
+        location: us-central1
 
   # ── Google Vertex AI (Claude models via Anthropic publisher) ─────────────────
   # Claude on Vertex uses /publishers/anthropic/models/{model}:rawPredict.
   # No format translation — the Anthropic Messages API body is forwarded as-is.
   # Auth: same GCP OAuth token as Gemini (no x-api-key needed).
   #
-  # Supported locations for Claude on Vertex:
+  # Claude models use /v1/messages (Anthropic Messages API, no format translation).
+  #
+  # Recommended locations for Claude on Vertex:
   #   us-east5, europe-west1, asia-southeast1  (check Model Garden for availability)
   #
   # Use the exact Claude model ID as the virtual name so Claude Code works
   # without any extra configuration.
+  #
+  # Pinned versions on Vertex use @ notation (e.g. claude-haiku-4-5@20251001),
+  # but clients (e.g. Claude Code) typically send - notation (claude-haiku-4-5-20251001).
+  # Use the `aliases` field to accept both.
   - name: claude-sonnet-4-6
     providers:
       - provider: vertex-ai
@@ -153,9 +160,15 @@ models:
         project_id: "${GCP_PROJECT_ID}"
         location: us-east5
 
+  - name: claude-opus-4-6
+    providers:
+      - provider: vertex-ai
+        model: claude-opus-4-6
+        project_id: "${GCP_PROJECT_ID}"
+        location: us-east5
+
   # The `aliases` field lets multiple names route to the same model entry.
-  # Useful when clients may send either a short alias (claude-haiku-4-5) or
-  # the full versioned ID (claude-haiku-4-5-20251001) for the same model.
+  # Useful when clients may send either the short name or the full versioned ID.
   - name: claude-haiku-4-5
     aliases:
       - claude-haiku-4-5-20251001
@@ -164,3 +177,40 @@ models:
         model: "claude-haiku-4-5@20251001"
         project_id: "${GCP_PROJECT_ID}"
         location: us-east5
+
+  - name: claude-sonnet-4-5
+    aliases:
+      - claude-sonnet-4-5-20250929
+    providers:
+      - provider: vertex-ai
+        model: "claude-sonnet-4-5@20250929"
+        project_id: "${GCP_PROJECT_ID}"
+        location: us-east5
+
+  # Older / legacy models (uncomment as needed):
+  # - name: claude-opus-4-5
+  #   aliases:
+  #     - claude-opus-4-5-20251101
+  #   providers:
+  #     - provider: vertex-ai
+  #       model: "claude-opus-4-5@20251101"
+  #       project_id: "${GCP_PROJECT_ID}"
+  #       location: us-east5
+  #
+  # - name: claude-sonnet-4
+  #   aliases:
+  #     - claude-sonnet-4-20250514
+  #   providers:
+  #     - provider: vertex-ai
+  #       model: "claude-sonnet-4@20250514"
+  #       project_id: "${GCP_PROJECT_ID}"
+  #       location: us-east5
+  #
+  # - name: claude-opus-4
+  #   aliases:
+  #     - claude-opus-4-20250514
+  #   providers:
+  #     - provider: vertex-ai
+  #       model: "claude-opus-4@20250514"
+  #       project_id: "${GCP_PROJECT_ID}"
+  #       location: us-east5

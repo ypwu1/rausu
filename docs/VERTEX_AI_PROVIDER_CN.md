@@ -205,39 +205,96 @@ provider 根据模型名自动识别类型：
 - 以 `claude-` 开头 → Anthropic publisher，使用 `/v1/messages` 端点
 - 其他名称 → Google publisher，使用 `/v1/chat/completions` 端点
 
-### 上游模型名
-
-**Claude 模型（配合 `/v1/messages` / Claude Code 使用）**
-
-| 模型 ID | 说明 |
-|---|---|
-| `claude-sonnet-4-6` | Claude Sonnet 4.6 |
-| `claude-opus-4-6` | Claude Opus 4.6 |
-| `claude-haiku-4-5-20251001` | Claude Haiku 4.5 |
-
-Claude on Vertex 支持的区域：`us-east5`、`europe-west1`、`asia-southeast1`。可用性请查看 [Model Garden](https://console.cloud.google.com/vertex-ai/model-garden)。
-
-**Gemini 模型（配合 `/v1/chat/completions` 使用）**
-
-| 模型 ID | 说明 |
-|---|---|
-| `gemini-2.5-pro-preview-05-06` | Gemini 2.5 Pro |
-| `gemini-2.0-flash-001` | Gemini 2.0 Flash |
-| `gemini-1.5-pro-002` | Gemini 1.5 Pro |
-| `gemini-1.5-flash-002` | Gemini 1.5 Flash |
-
-最新模型 ID 请查看 [Vertex AI Model Garden](https://console.cloud.google.com/vertex-ai/model-garden)。
-
 ### Location 值
 
 | 值 | 说明 |
 |---|---|
-| `us-central1` | 美国中部（默认，推荐） |
+| `us-central1` | 美国中部（默认，推荐用于 Gemini） |
+| `us-east5` | 美国东部（推荐用于 Claude on Vertex） |
+| `europe-west1` | 比利时 |
 | `europe-west4` | 荷兰 |
 | `asia-southeast1` | 新加坡 |
 | `global` | 全球端点（某些区域延迟更低） |
 
 完整列表参见 [Vertex AI 位置文档](https://cloud.google.com/vertex-ai/generative-ai/docs/learn/locations)。
+
+## 支持的模型参考
+
+> **关键概念：**
+> - `name` — 客户端发送的模型名（须精确匹配，例如 Claude Code 发送 `claude-sonnet-4-6`）
+> - `aliases` — 也可路由到该配置项的其他名称
+> - `model` — 实际发送给 Vertex AI 的模型 ID
+> - Vertex 上的固定版本使用 `@`（如 `claude-haiku-4-5@20251001`），但客户端通常发送 `-`（如 `claude-haiku-4-5-20251001`）—— 使用 `aliases` 进行桥接
+> - Claude 模型使用 `/v1/messages` 端点（Anthropic Messages API，无需格式转换）
+> - Gemini 模型使用 `/v1/chat/completions` 端点（OpenAI 兼容，自动格式转换）
+> - 各区域可用模型不同，请查看 [Model Garden](https://console.cloud.google.com/vertex-ai/model-garden) 确认支持的区域
+
+### Claude 模型（Anthropic publisher，`/v1/messages`）
+
+| 配置 `name` | 配置 `aliases` | 配置 `model`（发送给 Vertex） | Vertex Publisher | 说明 |
+|---|---|---|---|---|
+| `claude-sonnet-4-6` | | `claude-sonnet-4-6` | anthropic | 最新 Sonnet |
+| `claude-opus-4-6` | | `claude-opus-4-6` | anthropic | 最新 Opus |
+| `claude-haiku-4-5` | `claude-haiku-4-5-20251001` | `claude-haiku-4-5@20251001` | anthropic | 最快、最便宜 |
+| `claude-sonnet-4-5` | `claude-sonnet-4-5-20250929` | `claude-sonnet-4-5@20250929` | anthropic | 旧版 Sonnet |
+| `claude-opus-4-5` | `claude-opus-4-5-20251101` | `claude-opus-4-5@20251101` | anthropic | 旧版 Opus |
+| `claude-opus-4-1` | `claude-opus-4-1-20250805` | `claude-opus-4-1@20250805` | anthropic | 旧版 |
+| `claude-sonnet-4` | `claude-sonnet-4-20250514` | `claude-sonnet-4@20250514` | anthropic | 旧版 |
+| `claude-opus-4` | `claude-opus-4-20250514` | `claude-opus-4@20250514` | anthropic | 旧版 |
+| `claude-3-5-haiku` | `claude-3-5-haiku-20241022` | `claude-3-5-haiku@20241022` | anthropic | 已废弃 |
+
+Claude on Vertex 推荐区域：`us-east5`、`europe-west1`、`asia-southeast1`。
+
+### Gemini 模型（Google publisher，`/v1/chat/completions`）
+
+| 配置 `name` | 配置 `model`（发送给 Vertex） | Vertex Publisher | 说明 |
+|---|---|---|---|
+| `gemini-2.5-pro` | `gemini-2.5-pro` | google | 最新 Pro |
+| `gemini-2.5-flash` | `gemini-2.5-flash` | google | 最新 Flash |
+| `gemini-2.0-flash` | `gemini-2.0-flash` | google | 上一代 |
+
+Gemini 推荐区域：`us-central1`。
+
+### 完整配置示例
+
+```yaml
+models:
+  # Claude 模型（通过 /v1/messages）
+  - name: claude-sonnet-4-6
+    providers:
+      - provider: vertex-ai
+        model: claude-sonnet-4-6
+        project_id: "my-project"
+        location: "us-east5"
+        credentials_path: /path/to/credentials.json
+
+  - name: claude-opus-4-6
+    providers:
+      - provider: vertex-ai
+        model: claude-opus-4-6
+        project_id: "my-project"
+        location: "us-east5"
+        credentials_path: /path/to/credentials.json
+
+  - name: claude-haiku-4-5
+    aliases:
+      - claude-haiku-4-5-20251001
+    providers:
+      - provider: vertex-ai
+        model: "claude-haiku-4-5@20251001"
+        project_id: "my-project"
+        location: "us-east5"
+        credentials_path: /path/to/credentials.json
+
+  # Gemini 模型（通过 /v1/chat/completions）
+  - name: gemini-2.5-pro
+    providers:
+      - provider: vertex-ai
+        model: gemini-2.5-pro
+        project_id: "my-project"
+        location: "us-central1"
+        credentials_path: /path/to/credentials.json
+```
 
 ## 格式转换
 
