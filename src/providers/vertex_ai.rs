@@ -587,12 +587,18 @@ impl Provider for VertexAiProvider {
         };
         let url = self.claude_endpoint_url(&model, action);
 
-        // Vertex AI rawPredict requires `anthropic_version` in the request body.
-        // Claude Code sends this as the `anthropic-version` HTTP header, not in
-        // the body, so we inject it here if missing.
+        // Vertex AI rawPredict requires specific body transformations:
+        // 1. `anthropic_version` must be in the body (Claude Code sends it as
+        //    an HTTP header instead).
+        // 2. `model` must NOT be in the body — the model is specified in the
+        //    URL path. Sending it in the body causes 501 UNIMPLEMENTED.
         let mut body = body;
         if body.get("anthropic_version").is_none() {
             body["anthropic_version"] = Value::String("vertex-2023-10-16".to_string());
+        }
+        // Remove `model` from the body — Vertex takes it from the URL path.
+        if let Some(obj) = body.as_object_mut() {
+            obj.remove("model");
         }
 
         debug!(
