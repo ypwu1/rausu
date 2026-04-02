@@ -8,20 +8,17 @@
 //! Copilot API tokens are cached and re-exchanged automatically when they
 //! approach expiry (within `REFRESH_MARGIN_SECS`).
 //!
-//! # Token source
-//!
-//! The only supported token source is `~/.config/github-copilot/hosts.json`
-//! (or a custom path via `credentials_path`). Environment variables like
-//! `GH_TOKEN` are intentionally **not** supported because they often contain
-//! PATs (personal access tokens) which are incompatible with the Copilot
-//! internal token exchange endpoint.
+//! If `hosts.json` does not exist or lacks a token, and stdout is a TTY,
+//! the manager will automatically initiate a GitHub Device Flow login so
+//! the user can authorize without needing VS Code or `gh` CLI.
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
@@ -36,6 +33,15 @@ const COPILOT_TOKEN_ENDPOINT: &str = "https://api.github.com/copilot_internal/v2
 
 /// Default Copilot API base URL (used when the token exchange does not return one).
 const DEFAULT_COPILOT_ENDPOINT: &str = "https://api.githubcopilot.com";
+
+/// GitHub OAuth client ID used by GitHub Copilot extensions.
+const GITHUB_CLIENT_ID: &str = "Iv1.b507a08c87ecfe98";
+
+/// GitHub Device Flow: request a device code.
+const DEVICE_CODE_URL: &str = "https://github.com/login/device/code";
+
+/// GitHub Device Flow: poll for the access token.
+const DEVICE_TOKEN_URL: &str = "https://github.com/login/oauth/access_token";
 
 // ── Wire types ────────────────────────────────────────────────────────────────
 
@@ -67,6 +73,42 @@ struct CopilotTokenResponse {
 #[derive(Debug, Deserialize)]
 struct CopilotEndpoints {
     api: Option<String>,
+}
+
+/// Response from `POST /login/device/code`.
+#[derive(Debug, Deserialize)]
+struct DeviceCodeResponse {
+    device_code: String,
+    user_code: String,
+    verification_uri: String,
+    /// Minimum polling interval in seconds.
+    interval: Option<u64>,
+    /// Seconds until the device code expires.
+    #[allow(dead_code)]
+    expires_in: u64,
+}
+
+/// Response from `POST /login/oauth/access_token` during device flow polling.
+#[derive(Debug, Deserialize)]
+struct DeviceTokenResponse {
+    /// Present on success.
+    access_token: Option<String>,
+    /// Present on error — one of `authorization_pending`, `slow_down`,
+    /// `expired_token`, `access_denied`, etc.
+    error: Option<String>,
+}
+
+/// Minimal structure written to `hosts.json`.
+#[derive(Debug, Serialize)]
+struct HostsFileWrite {
+    #[serde(rename = "github.com")]
+    github: HostEntryWrite,
+}
+
+#[derive(Debug, Serialize)]
+struct HostEntryWrite {
+    oauth_token: String,
+    user: String,
 }
 
 // ── Cached state ──────────────────────────────────────────────────────────────
@@ -142,7 +184,7 @@ impl CopilotTokenManager {
         }
 
         debug!("Copilot API token expired or absent; re-exchanging");
-        let github_token = self.load_github_token()?;
+        let github_token = self.load_or_login().await?;
         let cached = self.exchange_token(&github_token).await?;
         info!("Copilot API token acquired successfully");
 
@@ -154,8 +196,23 @@ impl CopilotTokenManager {
     // ── GitHub token loading ──────────────────────────────────────────────────
 
     /// Load the raw GitHub OAuth device-flow token from `hosts.json`.
-    pub fn load_github_token(&self) -> Result<String> {
-        self.load_from_hosts_file()
+    ///
+    /// If the file is missing and stdout is a TTY, automatically initiates
+    /// GitHub Device Flow login and saves the resulting token.
+    pub async fn load_or_login(&self) -> Result<String> {
+        match self.load_from_hosts_file() {
+            Ok(token) => Ok(token),
+            Err(e) => {
+                if !std::io::stdout().is_terminal() {
+                    return Err(e);
+                }
+                info!("GitHub Copilot credentials not found, initiating login...");
+                let token = device_flow_login(&self.client).await?;
+                self.save_to_hosts_file(&token)?;
+                info!("GitHub Copilot login successful! Token saved.");
+                Ok(token)
+            }
+        }
     }
 
     /// Load from `~/.config/github-copilot/hosts.json` (or custom path).
@@ -190,6 +247,33 @@ impl CopilotTokenManager {
             return Some(p.clone());
         }
         dirs::home_dir().map(|home| home.join(DEFAULT_HOSTS_RELATIVE))
+    }
+
+    /// Save a GitHub OAuth token to `hosts.json`.
+    fn save_to_hosts_file(&self, token: &str) -> Result<()> {
+        let path = self
+            .hosts_file_path()
+            .context("Could not determine Copilot hosts.json path")?;
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+        }
+
+        let hosts = HostsFileWrite {
+            github: HostEntryWrite {
+                oauth_token: token.to_string(),
+                user: "github".to_string(),
+            },
+        };
+
+        let json =
+            serde_json::to_string_pretty(&hosts).context("Failed to serialize hosts.json")?;
+        std::fs::write(&path, json)
+            .with_context(|| format!("Failed to write hosts file: {}", path.display()))?;
+
+        debug!(path = %path.display(), "Saved GitHub token to hosts.json");
+        Ok(())
     }
 
     // ── Token exchange ────────────────────────────────────────────────────────
@@ -239,6 +323,105 @@ impl CopilotTokenManager {
             expires_at_secs: resp.expires_at,
         })
     }
+}
+
+// ── Device Flow ──────────────────────────────────────────────────────────────
+
+/// Perform GitHub Device Flow login and return the OAuth access token.
+///
+/// Prints a user code and verification URL to the terminal, then polls
+/// until the user completes authorization (or the code expires).
+pub async fn device_flow_login(client: &Client) -> Result<String> {
+    // Step 1: Request a device code.
+    let resp = client
+        .post(DEVICE_CODE_URL)
+        .header("accept", "application/json")
+        .form(&[("client_id", GITHUB_CLIENT_ID), ("scope", "read:user")])
+        .send()
+        .await
+        .context("Failed to request GitHub device code")?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("GitHub device code request failed: {}", body);
+    }
+
+    let dc: DeviceCodeResponse = resp
+        .json()
+        .await
+        .context("Failed to parse device code response")?;
+
+    // Step 2: Print instructions.
+    println!();
+    println!("\u{2554}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2557}");
+    println!("\u{2551}  GitHub Copilot Login Required           \u{2551}");
+    println!("\u{2560}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2563}");
+    println!("\u{2551}  1. Open: {}  ", dc.verification_uri);
+    println!("\u{2551}  2. Enter code: {:<25}\u{2551}", dc.user_code);
+    println!("\u{255a}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{255d}");
+    println!();
+
+    // Step 3: Poll for the access token.
+    let mut interval_secs = dc.interval.unwrap_or(5);
+    info!("Waiting for authorization...");
+
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+
+        let resp = client
+            .post(DEVICE_TOKEN_URL)
+            .header("accept", "application/json")
+            .form(&[
+                ("client_id", GITHUB_CLIENT_ID),
+                ("device_code", dc.device_code.as_str()),
+                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+            ])
+            .send()
+            .await
+            .context("Failed to poll GitHub token endpoint")?;
+
+        let dt: DeviceTokenResponse = resp
+            .json()
+            .await
+            .context("Failed to parse token poll response")?;
+
+        if let Some(token) = dt.access_token {
+            return Ok(token);
+        }
+
+        match dt.error.as_deref() {
+            Some("authorization_pending") => {
+                // Expected — keep polling.
+            }
+            Some("slow_down") => {
+                interval_secs += 5;
+                debug!(interval_secs, "GitHub asked us to slow down");
+            }
+            Some("expired_token") => {
+                anyhow::bail!("GitHub device code expired. Please restart Rausu to try again.");
+            }
+            Some("access_denied") => {
+                anyhow::bail!("Authorization was denied by the user.");
+            }
+            Some(other) => {
+                anyhow::bail!("GitHub device flow error: {}", other);
+            }
+            None => {
+                anyhow::bail!(
+                    "Unexpected response from GitHub token endpoint (no token, no error)"
+                );
+            }
+        }
+    }
+}
+
+/// Ensure that Copilot credentials are available, running device flow login
+/// if necessary. Call this at server startup before binding the listener.
+pub async fn ensure_copilot_credentials(token_manager: &CopilotTokenManager) -> Result<()> {
+    // Try loading the token; if it fails and we're in a TTY, device flow
+    // will be triggered automatically by `load_or_login`.
+    let _ = token_manager.load_or_login().await?;
+    Ok(())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

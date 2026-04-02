@@ -12,12 +12,12 @@ use axum::{
 use tokio::net::TcpListener;
 use tokio::signal;
 use tower_http::cors::{Any, CorsLayer};
-use tracing::info;
+use tracing::{info, warn};
 
 use std::path::PathBuf;
 
 use crate::auth::chatgpt_oauth::{ChatGptOAuthTokenManager, ChatGptTokenSource};
-use crate::auth::copilot::CopilotTokenManager;
+use crate::auth::copilot::{ensure_copilot_credentials, CopilotTokenManager};
 use crate::auth::oauth::{OAuthTokenManager, TokenSource};
 use crate::auth::vertex::VertexTokenManager;
 use crate::config::AppConfig;
@@ -60,7 +60,7 @@ impl Server {
 
     /// Build the Axum router and run until shutdown.
     pub async fn run(self) -> Result<()> {
-        let (providers, model_registry) = build_providers(&self.config);
+        let (providers, model_registry) = build_providers(&self.config).await;
 
         let state = AppState {
             providers: Arc::new(providers),
@@ -101,7 +101,7 @@ impl Server {
 /// Returns `(providers, model_registry)` where `model_registry` maps every
 /// known name or alias to `(provider_name, provider_model)`.  When two
 /// entries claim the same key the first one wins and a warning is logged.
-fn build_providers(
+async fn build_providers(
     config: &AppConfig,
 ) -> (Vec<Box<dyn Provider>>, HashMap<String, (String, String)>) {
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
@@ -327,6 +327,9 @@ fn build_providers(
                 Some(PathBuf::from(&credentials_path_str))
             };
             let token_manager = CopilotTokenManager::new(hosts_path);
+            if let Err(e) = ensure_copilot_credentials(&token_manager).await {
+                warn!("GitHub Copilot login failed: {e:#}");
+            }
             providers.push(Box::new(GitHubCopilotProvider::new(
                 token_manager,
                 model_names,
@@ -427,15 +430,15 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_alias_lookup_resolves_to_same_entry() {
+    #[tokio::test]
+    async fn test_alias_lookup_resolves_to_same_entry() {
         let config = minimal_config(vec![ModelConfig {
             name: "claude-haiku-4-5".to_string(),
             aliases: Some(vec!["claude-haiku-4-5-20251001".to_string()]),
             providers: vec![stub_deployment("anthropic", "claude-haiku-4-5-20251001")],
         }]);
 
-        let (_, registry) = build_providers(&config);
+        let (_, registry) = build_providers(&config).await;
 
         let primary = registry
             .get("claude-haiku-4-5")
@@ -448,8 +451,8 @@ mod tests {
         assert_eq!(primary.1, "claude-haiku-4-5-20251001");
     }
 
-    #[test]
-    fn test_duplicate_alias_is_skipped_first_wins() {
+    #[tokio::test]
+    async fn test_duplicate_alias_is_skipped_first_wins() {
         // Two models both declare the same alias — the first model's alias wins.
         let config = minimal_config(vec![
             ModelConfig {
@@ -464,7 +467,7 @@ mod tests {
             },
         ]);
 
-        let (_, registry) = build_providers(&config);
+        let (_, registry) = build_providers(&config).await;
 
         // Both primary names present
         assert!(registry.contains_key("model-a"));
