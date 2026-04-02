@@ -55,17 +55,50 @@ models:
   # Note: GH_TOKEN / GITHUB_TOKEN env vars are NOT supported — PATs are
   # incompatible with the Copilot token exchange endpoint.
   #
-  # Upstream model names: gpt-4o, claude-3.5-sonnet, o1-mini, etc.
-  # (Copilot model availability depends on your subscription tier.)
+  # Claude models → native /v1/messages passthrough (no protocol conversion)
+  # Other models → /chat/completions with protocol translation
+  #
+  # Copilot model IDs use dots (claude-opus-4.6) while Claude Code uses
+  # hyphens (claude-opus-4-6). The virtual `name` should match what the
+  # client sends; `model` is the upstream Copilot identifier.
+
+  # Claude models (native Anthropic passthrough)
+  - name: claude-opus-4-6
+    providers:
+      - provider: github-copilot
+        model: claude-opus-4.6
+
+  - name: claude-sonnet-4-6
+    providers:
+      - provider: github-copilot
+        model: claude-sonnet-4.6
+
+  - name: claude-sonnet-4-5
+    providers:
+      - provider: github-copilot
+        model: claude-sonnet-4.5
+
+  - name: claude-haiku-4-5
+    providers:
+      - provider: github-copilot
+        model: claude-haiku-4.5
+
+  # OpenAI models (protocol-translated)
   - name: copilot-gpt-4o
     providers:
       - provider: github-copilot
         model: gpt-4o
 
-  - name: copilot-claude-sonnet
-    providers:
-      - provider: github-copilot
-        model: claude-3.5-sonnet
+  # - name: copilot-gpt-5.4
+  #   providers:
+  #     - provider: github-copilot
+  #       model: gpt-5.4
+
+  # Google models (protocol-translated)
+  # - name: copilot-gemini-2.5-pro
+  #   providers:
+  #     - provider: github-copilot
+  #       model: gemini-2.5-pro
 
   # Optional: use a specific hosts.json path
   # - name: copilot-custom

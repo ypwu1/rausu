@@ -1,9 +1,10 @@
 //! GitHub Copilot provider implementation.
 //!
 //! GitHub Copilot exposes an OpenAI-compatible chat completions endpoint at
-//! `https://api.githubcopilot.com/chat/completions`.  Authentication uses a
-//! two-step exchange: a GitHub OAuth token is exchanged for a short-lived
-//! Copilot API bearer token via [`CopilotTokenManager`].
+//! `https://api.githubcopilot.com/chat/completions` and a native Anthropic
+//! Messages API endpoint at `https://api.githubcopilot.com/v1/messages`.
+//! Authentication uses a two-step exchange: a GitHub OAuth token is exchanged
+//! for a short-lived Copilot API bearer token via [`CopilotTokenManager`].
 //!
 //! # Supported endpoints
 //!
@@ -11,17 +12,15 @@
 //! |-------|---------|
 //! | `POST /v1/chat/completions` | ✅ full (streaming + non-streaming) |
 //! | `GET /v1/models` | ✅ lists configured model names |
-//! | `POST /v1/messages` | ✅ protocol-translated (Anthropic ↔ OpenAI) |
+//! | `POST /v1/messages` | ✅ Claude: native passthrough; others: protocol-translated |
 //! | `POST /v1/responses` | ❌ Copilot does not implement OpenAI Responses API |
 //!
-//! # Model names
+//! # Model routing
 //!
-//! Upstream Copilot model identifiers change over time.  Recommended values as
-//! of 2025-Q1:
-//!
-//! - `gpt-4o` — default chat model
-//! - `claude-3.5-sonnet` — Anthropic via Copilot
-//! - `o1-mini` — reasoning model
+//! Claude models (name starts with `claude`) are forwarded directly to Copilot's
+//! `/v1/messages` endpoint as native Anthropic Messages API requests.  All other
+//! models are translated to OpenAI ChatCompletions format and sent to
+//! `/chat/completions`.
 
 use std::pin::Pin;
 use std::sync::Arc;
@@ -325,6 +324,39 @@ fn openai_sse_to_anthropic(sse_text: &str, model: &str) -> Result<String, Provid
     Ok(output)
 }
 
+// ── Body sanitisation ─────────────────────────────────────────────────────────
+
+/// Recursively strip fields from `cache_control` objects that the upstream API
+/// does not accept (e.g. `scope`).  Claude Code may send:
+///
+/// ```json
+/// {"cache_control": {"type": "ephemeral", "scope": "turn"}}
+/// ```
+///
+/// Copilot's `/v1/messages` endpoint rejects the extra `scope` key.  We keep
+/// only `type` inside every `cache_control` object we encounter anywhere in the
+/// JSON tree.
+fn strip_cache_control_extras(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(cc) = map.get_mut("cache_control") {
+                if let Some(cc_obj) = cc.as_object_mut() {
+                    cc_obj.retain(|k, _| k == "type");
+                }
+            }
+            for v in map.values_mut() {
+                strip_cache_control_extras(v);
+            }
+        }
+        serde_json::Value::Array(arr) => {
+            for v in arr.iter_mut() {
+                strip_cache_control_extras(v);
+            }
+        }
+        _ => {}
+    }
+}
+
 // ── Provider ──────────────────────────────────────────────────────────────────
 
 /// GitHub Copilot chat completions provider.
@@ -461,13 +493,14 @@ impl Provider for GitHubCopilotProvider {
             .collect()
     }
 
-    /// Forward an Anthropic Messages API request to GitHub Copilot by translating
-    /// it to OpenAI ChatCompletions format and back.
+    /// Forward an Anthropic Messages API request to GitHub Copilot.
     ///
-    /// For non-streaming requests the OpenAI response is converted to an Anthropic
-    /// `message` object.  For streaming requests the OpenAI SSE stream is buffered,
-    /// translated to Anthropic SSE event sequence, and returned as a synthetic
-    /// `text/event-stream` response.
+    /// **Claude models** (name starts with `claude`) are forwarded directly to
+    /// Copilot's native `/v1/messages` endpoint — no protocol translation needed.
+    ///
+    /// **Non-Claude models** are translated to OpenAI ChatCompletions format via
+    /// [`anthropic_to_openai`] and sent to `/chat/completions`, with the response
+    /// translated back to Anthropic format.
     async fn proxy_messages(
         &self,
         body: serde_json::Value,
@@ -480,21 +513,66 @@ impl Provider for GitHubCopilotProvider {
             .unwrap_or("gpt-4o")
             .to_string();
 
-        let openai_body = anthropic_to_openai(&body);
-        debug!(model = %model, stream = is_stream, "Copilot messages proxy: translating Anthropic → OpenAI");
-
         let (api_token, endpoint) = self
             .token_manager
             .get_token()
             .await
             .map_err(|e| ProviderError::Internal(format!("Copilot auth failed: {e}")))?;
 
-        let url = format!("{}/chat/completions", endpoint);
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .map_err(|e| ProviderError::Internal(format!("Failed to build HTTP client: {e}")))?;
 
+        // Claude models → native Anthropic passthrough to /v1/messages
+        if model.starts_with("claude") {
+            let mut body = body;
+            strip_cache_control_extras(&mut body);
+
+            let url = format!("{}/v1/messages", endpoint);
+            debug!(model = %model, url = %url, stream = is_stream, "Copilot messages proxy: native passthrough");
+
+            let response = client
+                .post(&url)
+                .bearer_auth(&api_token)
+                .header("User-Agent", USER_AGENT)
+                .header("Editor-Version", EDITOR_VERSION)
+                .header("Editor-Plugin-Version", EDITOR_PLUGIN_VERSION)
+                .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
+                .header("content-type", "application/json")
+                .json(&body)
+                .send()
+                .await?;
+
+            if !is_stream {
+                let status = response.status();
+                let ct = response
+                    .headers()
+                    .get("content-type")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("application/json")
+                    .to_string();
+                let body_bytes = response
+                    .bytes()
+                    .await
+                    .map_err(|e| ProviderError::Internal(e.to_string()))?;
+                let rebuilt = http::Response::builder()
+                    .status(status.as_u16())
+                    .header("content-type", ct)
+                    .body(body_bytes)
+                    .map_err(|e| ProviderError::Internal(e.to_string()))?;
+                return Ok(reqwest::Response::from(rebuilt));
+            }
+
+            // Streaming: pass through the SSE stream directly.
+            return Ok(response);
+        }
+
+        // Non-Claude models → translate Anthropic → OpenAI → Anthropic
+        let openai_body = anthropic_to_openai(&body);
+        debug!(model = %model, stream = is_stream, "Copilot messages proxy: translating Anthropic → OpenAI");
+
+        let url = format!("{}/chat/completions", endpoint);
         let upstream = client
             .post(&url)
             .bearer_auth(&api_token)
@@ -757,6 +835,51 @@ mod tests {
         let result = openai_sse_to_anthropic(sse, "gpt-4o").unwrap();
         // The message_start event should have an id that starts with msg_
         assert!(result.contains("\"id\":\"msg_"));
+    }
+
+    // ── Cache control stripping tests ────────────────────────────────────────
+
+    #[test]
+    fn test_strip_cache_control_extras_removes_scope() {
+        let mut body = json!({
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": "hello",
+                            "cache_control": {"type": "ephemeral", "scope": "turn"}
+                        }
+                    ]
+                }
+            ],
+            "system": [
+                {
+                    "type": "text",
+                    "text": "You are helpful",
+                    "cache_control": {"type": "ephemeral", "scope": "turn"}
+                }
+            ]
+        });
+        strip_cache_control_extras(&mut body);
+
+        // scope should be gone, type should remain
+        let cc = &body["messages"][0]["content"][0]["cache_control"];
+        assert_eq!(cc, &json!({"type": "ephemeral"}));
+
+        let sys_cc = &body["system"][0]["cache_control"];
+        assert_eq!(sys_cc, &json!({"type": "ephemeral"}));
+    }
+
+    #[test]
+    fn test_strip_cache_control_extras_no_op_without_scope() {
+        let mut body = json!({
+            "messages": [{"role": "user", "content": "hello"}]
+        });
+        let original = body.clone();
+        strip_cache_control_extras(&mut body);
+        assert_eq!(body, original);
     }
 
     #[test]
