@@ -65,7 +65,7 @@ pub async fn messages(
     // Only providers that speak the Anthropic Messages API are allowed here.
     let supports_messages = matches!(
         provider_name.as_str(),
-        "anthropic" | "claude-subscription" | "vertex-ai"
+        "anthropic" | "claude-subscription" | "vertex-ai" | "github-copilot"
     );
     if !supports_messages {
         return (
