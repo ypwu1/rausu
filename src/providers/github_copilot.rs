@@ -13,7 +13,7 @@
 //! | `POST /v1/chat/completions` | ✅ full (streaming + non-streaming) |
 //! | `GET /v1/models` | ✅ lists configured model names |
 //! | `POST /v1/messages` | ✅ Claude: native passthrough; others: protocol-translated |
-//! | `POST /v1/responses` | ✅ passthrough to Copilot upstream `/v1/responses` |
+//! | `POST /v1/responses` | ✅ Claude: protocol-bridged via `/v1/messages`; others: passthrough |
 //!
 //! # Model routing
 //!
@@ -622,27 +622,95 @@ impl Provider for GitHubCopilotProvider {
 
     /// Forward an OpenAI Responses API request to GitHub Copilot.
     ///
-    /// The request is sent as-is to Copilot's `/v1/responses` endpoint with
-    /// the standard Copilot auth and identity headers. The upstream response
-    /// (streaming or non-streaming) is byte-proxied back without modification.
+    /// **Claude models** (name starts with `claude`) are protocol-bridged:
+    /// the Responses API request is converted to Messages API format, sent to
+    /// Copilot's `/v1/messages` endpoint, and the response is converted back
+    /// to Responses API format.
+    ///
+    /// **Non-Claude models** are sent as-is to Copilot's `/v1/responses` endpoint.
     async fn proxy_responses(
         &self,
         body: serde_json::Value,
-        _is_stream: bool,
+        is_stream: bool,
     ) -> Result<reqwest::Response, ProviderError> {
+        let model = body
+            .get("model")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+
         let (api_token, endpoint) = self
             .token_manager
             .get_token()
             .await
             .map_err(|e| ProviderError::Internal(format!("Copilot auth failed: {e}")))?;
 
-        let url = format!("{}/v1/responses", endpoint);
-        debug!(url = %url, "Sending passthrough Responses API request via github-copilot");
-
         let client = reqwest::Client::builder()
             .connect_timeout(std::time::Duration::from_secs(10))
             .build()
             .map_err(|e| ProviderError::Internal(format!("Failed to build HTTP client: {e}")))?;
+
+        // Claude models → convert Responses→Messages, send to /v1/messages,
+        // convert the response back to Responses format.
+        if model.starts_with("claude") {
+            use crate::transform;
+
+            let messages_body = transform::responses_to_messages_request(&body);
+            let url = format!("{}/v1/messages", endpoint);
+            debug!(model = %model, url = %url, stream = is_stream, "Copilot responses proxy: bridging Responses→Messages for Claude");
+
+            let upstream = client
+                .post(&url)
+                .bearer_auth(&api_token)
+                .header("User-Agent", USER_AGENT)
+                .header("Editor-Version", EDITOR_VERSION)
+                .header("Editor-Plugin-Version", EDITOR_PLUGIN_VERSION)
+                .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
+                .header("content-type", "application/json")
+                .json(&messages_body)
+                .send()
+                .await?;
+
+            let status = upstream.status();
+            if !status.is_success() {
+                let status_code = status.as_u16();
+                let msg = upstream.text().await.unwrap_or_default();
+                error!(status = status_code, body = %msg, "github-copilot responses→messages bridge error");
+                return Err(ProviderError::ProviderResponse {
+                    status: status_code,
+                    message: msg,
+                });
+            }
+
+            let http_resp = if is_stream {
+                // Buffer the Messages SSE stream and convert to Responses SSE.
+                let sse_text = upstream.text().await?;
+                let responses_sse = transform::convert_messages_sse_stream(&sse_text)
+                    .map_err(ProviderError::Serialisation)?;
+                http::Response::builder()
+                    .status(200u16)
+                    .header("content-type", "text/event-stream; charset=utf-8")
+                    .body(Bytes::from(responses_sse))
+                    .map_err(|e| ProviderError::Internal(e.to_string()))?
+            } else {
+                // Non-streaming: parse Messages response, convert to Responses format.
+                let messages_resp: serde_json::Value = upstream.json().await?;
+                let responses_resp = transform::messages_to_responses_response(&messages_resp);
+                let json = serde_json::to_string(&responses_resp)
+                    .map_err(ProviderError::Serialisation)?;
+                http::Response::builder()
+                    .status(200u16)
+                    .header("content-type", "application/json")
+                    .body(Bytes::from(json))
+                    .map_err(|e| ProviderError::Internal(e.to_string()))?
+            };
+
+            return Ok(reqwest::Response::from(http_resp));
+        }
+
+        // Non-Claude models → passthrough to /v1/responses
+        let url = format!("{}/v1/responses", endpoint);
+        debug!(url = %url, "Sending passthrough Responses API request via github-copilot");
 
         let response = client
             .post(&url)
