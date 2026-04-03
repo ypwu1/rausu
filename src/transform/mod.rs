@@ -4,6 +4,9 @@
 //! API format, and converts the Messages API responses back into Responses API
 //! format — enabling Codex CLI to use Claude models through Copilot.
 
+use bytes::Bytes;
+use futures::Stream;
+use futures::StreamExt;
 use serde_json::{json, Value};
 use tracing::warn;
 use uuid::Uuid;
@@ -723,6 +726,7 @@ fn convert_message_delta(data: &Value) -> Vec<(String, Value)> {
 ///
 /// Used by the streaming proxy to convert buffered Messages SSE into
 /// a complete Responses SSE text.
+#[allow(dead_code)]
 pub fn format_responses_sse_events(
     events: &[(String, Value)],
 ) -> Result<String, serde_json::Error> {
@@ -741,6 +745,7 @@ pub fn format_responses_sse_events(
 ///
 /// Parses the Messages SSE text, converts each event, and returns the
 /// formatted Responses SSE text.
+#[allow(dead_code)]
 pub fn convert_messages_sse_stream(sse_text: &str) -> Result<String, serde_json::Error> {
     let mut all_events: Vec<(String, Value)> = Vec::new();
     let mut current_event: Option<String> = None;
@@ -1430,6 +1435,7 @@ fn convert_response_incomplete(data: &Value) -> Vec<(String, Value)> {
 }
 
 /// Format a sequence of Messages SSE events into an SSE text stream.
+#[allow(dead_code)]
 pub fn format_messages_sse_events(events: &[(String, Value)]) -> Result<String, serde_json::Error> {
     let mut output = String::new();
     for (event_name, data) in events {
@@ -1446,6 +1452,7 @@ pub fn format_messages_sse_events(events: &[(String, Value)]) -> Result<String, 
 ///
 /// Parses the Responses SSE text, converts each event, and returns the
 /// formatted Messages SSE text.
+#[allow(dead_code)]
 pub fn convert_responses_sse_stream(sse_text: &str) -> Result<String, serde_json::Error> {
     let mut all_events: Vec<(String, Value)> = Vec::new();
     let mut current_event: Option<String> = None;
@@ -1482,6 +1489,165 @@ pub fn convert_responses_sse_stream(sse_text: &str) -> Result<String, serde_json
     }
 
     format_messages_sse_events(&all_events)
+}
+
+// ── Streaming SSE adapters ───────────────────────────────────────────────────
+
+/// Parse complete SSE events from a buffer, returning remaining unparsed bytes.
+///
+/// Each complete event (delimited by `\n\n`) is returned as a `(event_name, data_json)` pair.
+fn drain_sse_events(buffer: &mut String) -> Vec<(String, Value)> {
+    let mut events = Vec::new();
+
+    while let Some(pos) = buffer.find("\n\n") {
+        let block = buffer[..pos].to_string();
+        *buffer = buffer[pos + 2..].to_string();
+
+        if block.trim().is_empty() {
+            continue;
+        }
+
+        let mut event_type: Option<String> = None;
+        let mut data_parts: Vec<String> = Vec::new();
+
+        for line in block.lines() {
+            if let Some(evt) = line.strip_prefix("event: ") {
+                event_type = Some(evt.trim().to_string());
+            } else if let Some(d) = line.strip_prefix("data: ") {
+                data_parts.push(d.to_string());
+            } else if let Some(evt) = line.strip_prefix("event:") {
+                event_type = Some(evt.trim().to_string());
+            } else if let Some(d) = line.strip_prefix("data:") {
+                data_parts.push(d.to_string());
+            }
+        }
+
+        if data_parts.is_empty() {
+            continue;
+        }
+
+        let data_str = data_parts.join("\n");
+        let event_name = event_type.unwrap_or_default();
+
+        if let Ok(data) = serde_json::from_str::<Value>(&data_str) {
+            events.push((event_name, data));
+        }
+    }
+
+    events
+}
+
+/// Format a single converted SSE event pair as SSE text bytes.
+fn format_sse_event(event_name: &str, data: &Value) -> Bytes {
+    let mut out = String::new();
+    out.push_str("event: ");
+    out.push_str(event_name);
+    out.push_str("\ndata: ");
+    out.push_str(&serde_json::to_string(data).unwrap_or_default());
+    out.push_str("\n\n");
+    Bytes::from(out)
+}
+
+/// Create a true-streaming adapter: upstream Messages SSE → downstream Responses SSE.
+///
+/// Reads upstream SSE events one-by-one from the byte stream, converts each via
+/// [`messages_sse_to_responses_sse`], and yields converted events immediately.
+pub fn create_responses_sse_stream_from_messages<E: std::error::Error + Send + 'static>(
+    stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    async_stream::stream! {
+        let mut buffer = String::new();
+        tokio::pin!(stream);
+
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    let text = String::from_utf8_lossy(&bytes);
+                    buffer.push_str(&text);
+
+                    for (event_name, data) in drain_sse_events(&mut buffer) {
+                        let converted = messages_sse_to_responses_sse(&event_name, &data);
+                        for (out_event, out_data) in &converted {
+                            yield Ok(format_sse_event(out_event, out_data));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let error_event = json!({
+                        "type": "error",
+                        "error": {
+                            "type": "stream_error",
+                            "message": format!("Upstream stream error: {e}")
+                        }
+                    });
+                    yield Ok(format_sse_event("error", &error_event));
+                    break;
+                }
+            }
+        }
+
+        // Flush any remaining data in the buffer (stream ended without trailing \n\n).
+        if !buffer.trim().is_empty() {
+            buffer.push_str("\n\n");
+            for (event_name, data) in drain_sse_events(&mut buffer) {
+                let converted = messages_sse_to_responses_sse(&event_name, &data);
+                for (out_event, out_data) in &converted {
+                    yield Ok(format_sse_event(out_event, out_data));
+                }
+            }
+        }
+    }
+}
+
+/// Create a true-streaming adapter: upstream Responses SSE → downstream Messages SSE.
+///
+/// Reads upstream SSE events one-by-one from the byte stream, converts each via
+/// [`responses_sse_to_messages_sse`], and yields converted events immediately.
+pub fn create_messages_sse_stream_from_responses<E: std::error::Error + Send + 'static>(
+    stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    async_stream::stream! {
+        let mut buffer = String::new();
+        tokio::pin!(stream);
+
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    let text = String::from_utf8_lossy(&bytes);
+                    buffer.push_str(&text);
+
+                    for (event_name, data) in drain_sse_events(&mut buffer) {
+                        let converted = responses_sse_to_messages_sse(&event_name, &data);
+                        for (out_event, out_data) in &converted {
+                            yield Ok(format_sse_event(out_event, out_data));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let error_event = json!({
+                        "type": "error",
+                        "error": {
+                            "type": "stream_error",
+                            "message": format!("Upstream stream error: {e}")
+                        }
+                    });
+                    yield Ok(format_sse_event("error", &error_event));
+                    break;
+                }
+            }
+        }
+
+        // Flush remaining buffer.
+        if !buffer.trim().is_empty() {
+            buffer.push_str("\n\n");
+            for (event_name, data) in drain_sse_events(&mut buffer) {
+                let converted = responses_sse_to_messages_sse(&event_name, &data);
+                for (out_event, out_data) in &converted {
+                    yield Ok(format_sse_event(out_event, out_data));
+                }
+            }
+        }
+    }
 }
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -2458,5 +2624,205 @@ data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"
         assert!(result.contains("message_delta"));
         assert!(result.contains("message_stop"));
         assert!(result.contains("end_turn"));
+    }
+
+    // ── Streaming adapter tests ─────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_streaming_messages_to_responses_single_chunk() {
+        use bytes::Bytes;
+        use futures::StreamExt;
+
+        let sse_text = "\
+event: message_start\n\
+data: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_test\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-4-20250514\",\"content\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\
+\n\
+event: content_block_start\n\
+data: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\
+\n\
+event: content_block_delta\n\
+data: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hello\"}}\n\
+\n\
+event: content_block_stop\n\
+data: {\"type\":\"content_block_stop\",\"index\":0}\n\
+\n\
+event: message_delta\n\
+data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\
+\n\
+event: message_stop\n\
+data: {\"type\":\"message_stop\"}\n\
+\n";
+
+        let input_stream =
+            futures::stream::once(
+                async move { Ok::<Bytes, std::io::Error>(Bytes::from(sse_text)) },
+            );
+
+        let output_stream = create_responses_sse_stream_from_messages(input_stream);
+        tokio::pin!(output_stream);
+
+        let mut collected = String::new();
+        while let Some(Ok(bytes)) = output_stream.next().await {
+            collected.push_str(&String::from_utf8_lossy(&bytes));
+        }
+
+        assert!(collected.contains("response.created"));
+        assert!(collected.contains("response.in_progress"));
+        assert!(collected.contains("response.output_item.added"));
+        assert!(collected.contains("response.output_text.delta"));
+        assert!(collected.contains("response.completed"));
+    }
+
+    #[tokio::test]
+    async fn test_streaming_messages_to_responses_multi_chunk() {
+        use bytes::Bytes;
+        use futures::StreamExt;
+
+        // Split the SSE stream across multiple chunks, including mid-event splits
+        let chunk1 = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_t\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"test\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n";
+        let chunk2 = "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n";
+        let chunk3 = "\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"Hi\"}}\n\n";
+        let chunk4 = "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\nevent: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
+
+        let input_stream = futures::stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::from(chunk1)),
+            Ok(Bytes::from(chunk2)),
+            Ok(Bytes::from(chunk3)),
+            Ok(Bytes::from(chunk4)),
+        ]);
+
+        let output_stream = create_responses_sse_stream_from_messages(input_stream);
+        tokio::pin!(output_stream);
+
+        let mut collected = String::new();
+        while let Some(Ok(bytes)) = output_stream.next().await {
+            collected.push_str(&String::from_utf8_lossy(&bytes));
+        }
+
+        assert!(collected.contains("response.created"));
+        assert!(collected.contains("response.output_text.delta"));
+        assert!(collected.contains("response.completed"));
+    }
+
+    #[tokio::test]
+    async fn test_streaming_responses_to_messages_single_chunk() {
+        use bytes::Bytes;
+        use futures::StreamExt;
+
+        let sse_text = "\
+event: response.created\n\
+data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_test\",\"object\":\"response\",\"model\":\"gpt-4o\",\"status\":\"in_progress\",\"output\":[],\"usage\":{\"input_tokens\":5,\"output_tokens\":0}}}\n\
+\n\
+event: response.output_item.added\n\
+data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"item_0\",\"role\":\"assistant\",\"content\":[]}}\n\
+\n\
+event: response.output_text.delta\n\
+data: {\"type\":\"response.output_text.delta\",\"item_id\":\"item_0\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hello\"}\n\
+\n\
+event: response.output_item.done\n\
+data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"item_0\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hello\"}]}}\n\
+\n\
+event: response.completed\n\
+data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"object\":\"response\",\"model\":\"gpt-4o\",\"status\":\"completed\",\"output\":[{\"type\":\"message\",\"id\":\"item_0\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"Hello\"}]}],\"usage\":{\"input_tokens\":5,\"output_tokens\":1}}}\n\
+\n";
+
+        let input_stream =
+            futures::stream::once(
+                async move { Ok::<Bytes, std::io::Error>(Bytes::from(sse_text)) },
+            );
+
+        let output_stream = create_messages_sse_stream_from_responses(input_stream);
+        tokio::pin!(output_stream);
+
+        let mut collected = String::new();
+        while let Some(Ok(bytes)) = output_stream.next().await {
+            collected.push_str(&String::from_utf8_lossy(&bytes));
+        }
+
+        assert!(collected.contains("message_start"));
+        assert!(collected.contains("content_block_start"));
+        assert!(collected.contains("content_block_delta"));
+        assert!(collected.contains("content_block_stop"));
+        assert!(collected.contains("message_delta"));
+        assert!(collected.contains("message_stop"));
+    }
+
+    #[tokio::test]
+    async fn test_streaming_responses_to_messages_multi_chunk() {
+        use bytes::Bytes;
+        use futures::StreamExt;
+
+        let chunk1 = "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_t\",\"object\":\"response\",\"model\":\"gpt-4o\",\"status\":\"in_progress\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n";
+        let chunk2 = "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"item_0\",\"role\":\"assistant\",\"content\":[]}}\n";
+        let chunk3 = "\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"item_0\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hi\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_t\",\"object\":\"response\",\"model\":\"gpt-4o\",\"status\":\"completed\",\"output\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":1}}}\n\n";
+
+        let input_stream = futures::stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::from(chunk1)),
+            Ok(Bytes::from(chunk2)),
+            Ok(Bytes::from(chunk3)),
+        ]);
+
+        let output_stream = create_messages_sse_stream_from_responses(input_stream);
+        tokio::pin!(output_stream);
+
+        let mut collected = String::new();
+        while let Some(Ok(bytes)) = output_stream.next().await {
+            collected.push_str(&String::from_utf8_lossy(&bytes));
+        }
+
+        assert!(collected.contains("message_start"));
+        assert!(collected.contains("content_block_delta"));
+        assert!(collected.contains("message_stop"));
+    }
+
+    #[tokio::test]
+    async fn test_streaming_error_forwarded() {
+        use bytes::Bytes;
+        use futures::StreamExt;
+
+        let input_stream = futures::stream::iter(vec![
+            Ok::<Bytes, std::io::Error>(Bytes::from(
+                "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_e\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"test\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}\n\n",
+            )),
+            Err(std::io::Error::new(std::io::ErrorKind::ConnectionReset, "connection lost")),
+        ]);
+
+        let output_stream = create_responses_sse_stream_from_messages(input_stream);
+        tokio::pin!(output_stream);
+
+        let mut collected = String::new();
+        while let Some(Ok(bytes)) = output_stream.next().await {
+            collected.push_str(&String::from_utf8_lossy(&bytes));
+        }
+
+        // Should have the converted first event plus an error event
+        assert!(collected.contains("response.created"));
+        assert!(collected.contains("event: error"));
+        assert!(collected.contains("stream_error"));
+        assert!(collected.contains("connection lost"));
+    }
+
+    #[tokio::test]
+    async fn test_streaming_no_trailing_newline() {
+        use bytes::Bytes;
+        use futures::StreamExt;
+
+        // Stream ends without trailing \n\n — flush logic should handle it
+        let sse_text = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_f\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"test\",\"content\":[],\"usage\":{\"input_tokens\":1,\"output_tokens\":0}}}";
+
+        let input_stream =
+            futures::stream::once(
+                async move { Ok::<Bytes, std::io::Error>(Bytes::from(sse_text)) },
+            );
+
+        let output_stream = create_responses_sse_stream_from_messages(input_stream);
+        tokio::pin!(output_stream);
+
+        let mut collected = String::new();
+        while let Some(Ok(bytes)) = output_stream.next().await {
+            collected.push_str(&String::from_utf8_lossy(&bytes));
+        }
+
+        assert!(collected.contains("response.created"));
     }
 }

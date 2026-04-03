@@ -739,7 +739,6 @@ impl Provider for ChatGptSubscriptionProvider {
         _client_betas: Option<String>,
     ) -> Result<reqwest::Response, ProviderError> {
         use crate::transform;
-        use bytes::Bytes;
 
         let (token, account_id) = self
             .token_manager
@@ -787,14 +786,15 @@ impl Provider for ChatGptSubscriptionProvider {
         }
 
         let http_resp = if is_stream {
-            // Buffer the Responses SSE stream and convert to Messages SSE.
-            let sse_text = upstream.text().await?;
-            let messages_sse = transform::convert_responses_sse_stream(&sse_text)
-                .map_err(ProviderError::Serialisation)?;
+            // True streaming: convert Responses SSE → Messages SSE event-by-event.
+            let byte_stream = upstream.bytes_stream();
+            let converted_stream =
+                transform::create_messages_sse_stream_from_responses(byte_stream);
+            let body = reqwest::Body::wrap_stream(converted_stream);
             http::Response::builder()
                 .status(200u16)
                 .header("content-type", "text/event-stream; charset=utf-8")
-                .body(Bytes::from(messages_sse))
+                .body(body)
                 .map_err(|e| ProviderError::Internal(e.to_string()))?
         } else {
             // Buffer the Responses SSE (ChatGPT always streams), aggregate, then
@@ -808,7 +808,7 @@ impl Provider for ChatGptSubscriptionProvider {
             http::Response::builder()
                 .status(200u16)
                 .header("content-type", "application/json")
-                .body(Bytes::from(json))
+                .body(reqwest::Body::from(json))
                 .map_err(|e| ProviderError::Internal(e.to_string()))?
         };
 

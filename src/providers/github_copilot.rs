@@ -683,14 +683,15 @@ impl Provider for GitHubCopilotProvider {
             }
 
             let http_resp = if is_stream {
-                // Buffer the Messages SSE stream and convert to Responses SSE.
-                let sse_text = upstream.text().await?;
-                let responses_sse = transform::convert_messages_sse_stream(&sse_text)
-                    .map_err(ProviderError::Serialisation)?;
+                // True streaming: convert Messages SSE → Responses SSE event-by-event.
+                let byte_stream = upstream.bytes_stream();
+                let converted_stream =
+                    transform::create_responses_sse_stream_from_messages(byte_stream);
+                let body = reqwest::Body::wrap_stream(converted_stream);
                 http::Response::builder()
                     .status(200u16)
                     .header("content-type", "text/event-stream; charset=utf-8")
-                    .body(Bytes::from(responses_sse))
+                    .body(body)
                     .map_err(|e| ProviderError::Internal(e.to_string()))?
             } else {
                 // Non-streaming: parse Messages response, convert to Responses format.
@@ -701,7 +702,7 @@ impl Provider for GitHubCopilotProvider {
                 http::Response::builder()
                     .status(200u16)
                     .header("content-type", "application/json")
-                    .body(Bytes::from(json))
+                    .body(reqwest::Body::from(json))
                     .map_err(|e| ProviderError::Internal(e.to_string()))?
             };
 
