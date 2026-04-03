@@ -16,7 +16,7 @@ Responses API 也可通过 `/v1/responses` 直接访问。
 | `POST /v1/chat/completions` | ✅（流式 + 非流式，桥接至 Responses API） |
 | `POST /v1/responses` | ✅ 原生 Responses API 直传 |
 | `GET /v1/models` | ✅ 列出已配置的模型名 |
-| `POST /v1/messages` | ❌ 不支持 Anthropic Messages API |
+| `POST /v1/messages` | ✅ GPT 模型：Messages→Responses 桥接；Claude 模型：不支持 |
 
 ## 前提条件
 
@@ -245,10 +245,36 @@ docker run \
 
 在 `config.yaml` 中添加 `credentials_path: /app/chatgpt-auth.json`，或使用 `CHATGPT_ACCESS_TOKEN` 环境变量方式。
 
+## 与 Claude Code 配合使用（通过协议桥接使用 GPT 模型）
+
+Claude Code 向 `/v1/messages` 发送请求。当配置的模型为 GPT 模型时，Rausu 自动进行
+Messages API → Responses API 桥接，转发到 ChatGPT Responses 端点。
+
+```yaml
+models:
+  # Claude Code 可通过 /v1/messages 使用此 GPT 模型
+  - name: gpt-5.4
+    providers:
+      - provider: chatgpt-subscription
+        model: gpt-5.4
+        token_source: auto
+```
+
+```bash
+export ANTHROPIC_BASE_URL="http://localhost:4000"
+export ANTHROPIC_API_KEY="local-proxy"
+# 在 Claude Code 设置中选择 gpt-5.4 作为模型
+```
+
+Rausu 将 Messages API 请求转换为 Responses 格式，代理到 ChatGPT，再将响应转换回
+Messages 格式——包括零缓冲的 SSE 流式传输。完整支持工具调用（`tool_use` ↔
+`function_call`）。
+
 ## 已知限制
 
-- **不支持 `/v1/messages`。** Anthropic 原生路由请使用 `provider: anthropic` 或 `provider: claude-subscription`。
+- **Messages API 仅支持 GPT 模型。** Claude 模型无法通过 `chatgpt-subscription` 使用；
+  Claude 请使用 `provider: anthropic`、`provider: claude-subscription` 或
+  `provider: github-copilot`。
 - **订阅速率限制**和模型可用性由 OpenAI 控制 — Rausu 原样传递上游 HTTP 状态码。
-- **无工具/函数调用格式转换**（Chat Completions ↔ Responses API）。
 - **Token 获取需手动操作。** 与 GitHub Copilot 不同，此 provider 没有自动的 device-flow 登录流程，需自行获取并放置 token。
 - `base_url` 配置字段对此 provider 无效；端点始终为 `https://chatgpt.com/backend-api/codex/responses`。

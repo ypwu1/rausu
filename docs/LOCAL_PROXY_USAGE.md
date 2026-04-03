@@ -13,6 +13,7 @@ Rausu's **local runtime** is a single-user HTTP proxy that runs on your machine.
 - Inject real upstream credentials (OAuth tokens, API keys) so local clients don't need to hold them directly.
 - Expose a unified OpenAI-compatible API surface that multiple tools can share.
 - Provide transparent passthrough for native Responses API and Messages API traffic.
+- Bridge protocols between clients and providers — Codex CLI can use Claude models, Claude Code can use GPT models.
 
 ```
   Codex CLI / Claude Code / any OpenAI client
@@ -20,8 +21,9 @@ Rausu's **local runtime** is a single-user HTTP proxy that runs on your machine.
          ▼
   http://localhost:4000
          │  Rausu injects real upstream auth
+         │  + protocol bridge when needed
          ▼
-  OpenAI / Anthropic / Claude subscription / ChatGPT subscription
+  OpenAI / Anthropic / Claude subscription / ChatGPT subscription / GitHub Copilot
 ```
 
 ---
@@ -261,6 +263,40 @@ Codex will send requests to `http://localhost:4000/v1/responses`, and Rausu will
 
 ---
 
+## Codex CLI with Claude Models (via Protocol Bridge)
+
+Codex CLI can use Claude models via the GitHub Copilot provider. Rausu automatically bridges the Responses API request to the Anthropic Messages API format.
+
+**Step 1 — Configure Rausu:**
+
+```yaml
+models:
+  - name: claude-sonnet-4-6
+    providers:
+      - provider: github-copilot
+        model: claude-sonnet-4.6
+    aliases:
+      - claude-sonnet-4.6
+```
+
+**Step 2 — Start Rausu:**
+
+```bash
+./target/release/rausu --config config.yaml
+```
+
+**Step 3 — Point Codex CLI at Rausu:**
+
+```bash
+export OPENAI_BASE_URL="http://localhost:4000/v1"
+export OPENAI_API_KEY="local-proxy"
+codex --model claude-sonnet-4-6
+```
+
+Rausu bridges the `/v1/responses` request to Copilot's native `/v1/messages` endpoint, converts the response back, and streams events with zero buffering.
+
+---
+
 ## Connecting Claude Code
 
 Claude Code uses the Anthropic Messages API (`/v1/messages`) as its primary endpoint. Rausu implements this endpoint as a passthrough.
@@ -302,6 +338,39 @@ Claude Code will send requests to `http://localhost:4000/v1/messages`, and Rausu
 
 ---
 
+## Claude Code with GPT Models (via Protocol Bridge)
+
+Claude Code can use GPT models via the ChatGPT subscription provider. Rausu automatically bridges the Messages API request to the Responses API format.
+
+**Step 1 — Configure Rausu:**
+
+```yaml
+models:
+  - name: gpt-5.4
+    providers:
+      - provider: chatgpt-subscription
+        model: gpt-5.4
+        token_source: auto
+```
+
+**Step 2 — Start Rausu:**
+
+```bash
+./target/release/rausu --config config.yaml
+```
+
+**Step 3 — Point Claude Code at Rausu:**
+
+```bash
+export ANTHROPIC_BASE_URL="http://localhost:4000"
+export ANTHROPIC_API_KEY="local-proxy"
+claude
+```
+
+In Claude Code's model picker, select `gpt-5.4`. Rausu bridges the `/v1/messages` request to ChatGPT's native Responses API, converts the response back, and streams events with zero buffering. Tool calling is fully supported.
+
+---
+
 ## Supported Endpoints
 
 | Method | Endpoint | Description |
@@ -313,9 +382,9 @@ Claude Code will send requests to `http://localhost:4000/v1/messages`, and Rausu
 | `POST` | `/v1/responses/compact` | OpenAI Responses API compact variant — transparent passthrough |
 | `POST` | `/v1/messages` | Anthropic Messages API — transparent passthrough (Claude Code) |
 
-**Passthrough vs. translated:**
-- `/v1/responses` and `/v1/responses/compact` — forwarded to the upstream provider as-is when the upstream supports the Responses API natively. No format conversion overhead.
-- `/v1/messages` — forwarded to the Anthropic or Claude subscription endpoint as-is.
+**Passthrough vs. protocol bridge:**
+- `/v1/responses` — forwarded as-is when the upstream supports Responses API natively (OpenAI, ChatGPT subscription, Copilot GPT models). For Claude models via Copilot, Rausu bridges Responses→Messages automatically.
+- `/v1/messages` — forwarded as-is for Claude providers. For GPT models via ChatGPT subscription, Rausu bridges Messages→Responses automatically.
 - `/v1/chat/completions` — routed through the provider abstraction layer; Rausu normalizes the request/response format as needed.
 
 ---
@@ -331,7 +400,7 @@ The following are known limitations of the current local runtime. They are inten
 | **No routing or fallback** | Each virtual model maps to a single provider deployment. Multi-provider fallback and load balancing are not yet implemented. |
 | **No admin UI** | Configuration is file-based only. |
 | **No rate limiting or budget enforcement** | Requests are forwarded without local quotas. |
-| **Responses API: provider support varies** | `/v1/responses` passthrough works when the upstream supports the Responses API natively (e.g., OpenAI, ChatGPT subscription). Providers that only support Chat Completions will return an unsupported error. |
+| **Responses API: provider support varies** | `/v1/responses` passthrough works natively for OpenAI and ChatGPT subscription. For Claude models via Copilot, a protocol bridge is used. Providers without Responses API support and without a bridge will return an unsupported error. |
 
 ---
 

@@ -19,8 +19,8 @@ use the OpenAI-compatible `/chat/completions` endpoint.
 |---|---|
 | `POST /v1/chat/completions` | ✅ (streaming + non-streaming) |
 | `GET /v1/models` | ✅ lists configured model names |
-| `POST /v1/messages` | ✅ Claude: native passthrough; others: protocol-translated |
-| `POST /v1/responses` | ❌ not supported |
+| `POST /v1/messages` | ✅ Claude: native passthrough; GPT/others: protocol-translated |
+| `POST /v1/responses` | ✅ Claude: Responses→Messages bridge; GPT/others: not supported |
 
 ## Prerequisites
 
@@ -167,6 +167,10 @@ Overrides the default `~/.config/github-copilot/hosts.json` path.
 
 - **Claude models use native `/v1/messages` passthrough** — no protocol conversion,
   full feature support (thinking, tools, vision, streaming).
+- **Claude models via `/v1/responses` use the protocol bridge** — Rausu converts the
+  Responses API request to Messages API format, calls Copilot's native `/v1/messages`,
+  then converts the response back.  This enables Codex CLI to use Claude models via
+  Copilot with full tool calling and streaming support.
 - **Copilot model IDs use dots** (`claude-opus-4.6`) while **Claude Code uses hyphens**
   (`claude-opus-4-6`).  Use `aliases` in your config to accept both naming conventions.
 - Model availability depends on your Copilot subscription tier.  Copilot may return
@@ -236,9 +240,37 @@ hosts.json (ghu_...)  →  GET /copilot_internal/v2/token  →  Copilot API toke
 Rausu caches the Copilot API token and re-exchanges it 5 minutes before expiry.
 Tokens are **never logged**.
 
+## Using with Codex CLI (Claude models via protocol bridge)
+
+Codex CLI sends requests to `/v1/responses`.  When the configured model is a Claude model,
+Rausu automatically bridges Responses API → Messages API and forwards to Copilot's native
+`/v1/messages` endpoint.
+
+```yaml
+models:
+  # Codex CLI can use this Claude model via /v1/responses
+  - name: claude-sonnet-4-6
+    providers:
+      - provider: github-copilot
+        model: claude-sonnet-4.6
+    aliases:
+      - claude-sonnet-4.6   # matches what Codex CLI might request
+```
+
+```bash
+export OPENAI_BASE_URL="http://localhost:4000/v1"
+export OPENAI_API_KEY="local-proxy"
+codex --model claude-sonnet-4-6
+```
+
+Rausu converts the Responses API request to Messages format, proxies to Copilot, then
+converts the response back to Responses format — including SSE streaming with zero
+buffering.
+
 ## Known limitations
 
-- **No Responses API passthrough** (`/v1/responses`).
+- **Responses API: Claude models only.** GPT and other non-Claude models do not have a
+  `/v1/responses` bridge; use `/v1/chat/completions` for those.
 - Copilot rate limits and model availability are controlled by GitHub — Rausu
   propagates the upstream HTTP status code unchanged.
 - Tool/function calling support depends on the upstream Copilot model.

@@ -14,7 +14,9 @@ A high-performance LLM API Gateway written in Rust — a drop-in replacement for
 ## Features
 
 - **OpenAI-compatible API** — works with any OpenAI SDK client
-- **Multi-provider** — supports OpenAI, Anthropic (API key), Claude Subscription (OAuth), and ChatGPT Subscription (OAuth)
+- **Multi-provider** — supports OpenAI, Anthropic (API key), Claude Subscription (OAuth), GitHub Copilot, and ChatGPT Subscription (OAuth)
+- **Protocol Bridge** — bi-directional conversion between OpenAI Responses API and Anthropic Messages API; Codex CLI can use Claude models, Claude Code can use GPT models
+- **True SSE Streaming** — zero-buffer per-event streaming for all paths including protocol bridge (first-token latency matches passthrough)
 - **Streaming** — full SSE streaming support
 - **Single binary** — zero runtime dependencies
 - **YAML configuration** — with environment variable interpolation
@@ -176,6 +178,21 @@ response = client.chat.completions.create(
 )
 ```
 
+## Client × Model Matrix
+
+All client-model combinations are supported via passthrough or protocol bridge:
+
+| Client | Protocol | Model | Path |
+|--------|---------|-------|------|
+| Claude Code | `/v1/messages` | Claude (Copilot) | Passthrough |
+| Claude Code | `/v1/messages` | Claude (Anthropic) | Passthrough |
+| Claude Code | `/v1/messages` | GPT (ChatGPT sub) | Messages→Responses bridge |
+| Codex CLI | `/v1/responses` | GPT (ChatGPT sub) | Passthrough |
+| Codex CLI | `/v1/responses` | GPT (Copilot) | Passthrough |
+| Codex CLI | `/v1/responses` | Claude (Copilot) | Responses→Messages bridge |
+
+See [docs/PROTOCOL_BRIDGE_PLAN.md](docs/PROTOCOL_BRIDGE_PLAN.md) for protocol conversion details.
+
 ## API Endpoints
 
 | Endpoint | Method | Description |
@@ -183,9 +200,9 @@ response = client.chat.completions.create(
 | `/health` | GET | Health check |
 | `/v1/models` | GET | List configured models |
 | `/v1/chat/completions` | POST | Chat completions — routing + format translation |
-| `/v1/responses` | POST | OpenAI Responses API — transparent passthrough (Codex CLI) |
+| `/v1/responses` | POST | OpenAI Responses API — passthrough or Responses→Messages bridge |
 | `/v1/responses/compact` | POST | OpenAI Responses API compact variant — transparent passthrough |
-| `/v1/messages` | POST | Anthropic Messages API — transparent passthrough (Claude Code) |
+| `/v1/messages` | POST | Anthropic Messages API — passthrough or Messages→Responses bridge |
 
 > **Note:** All `/v1/...` routes are also available without the prefix (e.g. `/responses`, `/chat/completions`, `/models`, `/messages`). This allows clients like Codex CLI that use `{base_url}/responses` instead of `{base_url}/v1/responses` to work without extra configuration.
 

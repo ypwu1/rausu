@@ -17,8 +17,8 @@ Claude 模型直接转发到 Copilot 原生 `/v1/messages` 端点（Anthropic Me
 |---|---|
 | `POST /v1/chat/completions` | ✅（流式 + 非流式） |
 | `GET /v1/models` | ✅ 列出已配置的模型名 |
-| `POST /v1/messages` | ✅ Claude：原生直传；其他：协议转换 |
-| `POST /v1/responses` | ❌ 不支持 |
+| `POST /v1/messages` | ✅ Claude：原生直传；GPT/其他：协议转换 |
+| `POST /v1/responses` | ✅ Claude：Responses→Messages 桥接；GPT/其他：不支持 |
 
 ## 前提条件
 
@@ -163,6 +163,10 @@ curl -s http://localhost:4000/v1/chat/completions \
 
 - **Claude 模型使用原生 `/v1/messages` 直传** — 无协议转换，完整特性支持
   （思维、工具、视觉、流式）。
+- **通过 `/v1/responses` 访问 Claude 模型时使用协议桥接** — Rausu 将 Responses API
+  请求转换为 Messages API 格式，调用 Copilot 原生 `/v1/messages`，再将响应转换回
+  Responses API 格式。这使得 Codex CLI 可以通过 Copilot 使用 Claude 模型，完整支持
+  工具调用和流式传输。
 - **Copilot 模型 ID 使用点号**（`claude-opus-4.6`），而 **Claude Code 使用连字符**
   （`claude-opus-4-6`）。在配置中使用 `aliases` 字段来兼容两种命名方式。
 - 模型可用性取决于你的 Copilot 订阅级别。Copilot 可能对未在你计划中启用的模型返回
@@ -231,9 +235,35 @@ hosts.json (ghu_...)  →  GET /copilot_internal/v2/token  →  Copilot API toke
 
 Rausu 缓存 Copilot API token 并在过期前 5 分钟重新换取。Token **永远不会被记录到日志**。
 
+## 与 Codex CLI 配合使用（通过协议桥接使用 Claude 模型）
+
+Codex CLI 向 `/v1/responses` 发送请求。当配置的模型为 Claude 模型时，Rausu 自动进行
+Responses API → Messages API 桥接，转发到 Copilot 原生 `/v1/messages` 端点。
+
+```yaml
+models:
+  # Codex CLI 可通过 /v1/responses 使用此 Claude 模型
+  - name: claude-sonnet-4-6
+    providers:
+      - provider: github-copilot
+        model: claude-sonnet-4.6
+    aliases:
+      - claude-sonnet-4.6   # 匹配 Codex CLI 可能请求的名称
+```
+
+```bash
+export OPENAI_BASE_URL="http://localhost:4000/v1"
+export OPENAI_API_KEY="local-proxy"
+codex --model claude-sonnet-4-6
+```
+
+Rausu 将 Responses API 请求转换为 Messages 格式，代理到 Copilot，再将响应转换回
+Responses 格式——包括零缓冲的 SSE 流式传输。
+
 ## 已知限制
 
-- **不支持 Responses API 直传**（`/v1/responses`）。
+- **Responses API 仅支持 Claude 模型。** GPT 及其他非 Claude 模型没有 `/v1/responses`
+  桥接；这些模型请使用 `/v1/chat/completions`。
 - Copilot 的速率限制和模型可用性由 GitHub 控制 — Rausu 原样传递上游 HTTP 状态码。
 - 工具/函数调用支持取决于上游 Copilot 模型。
 - `base_url` 配置字段对此 provider 无效；端点由 token 换取响应决定（默认为

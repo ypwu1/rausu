@@ -8,14 +8,14 @@
 
 | 客户端 | 发的协议 | 想用的模型 | Rausu 需要做的 | 现状 |
 |--------|---------|-----------|---------------|------|
-| Claude Code | `/v1/messages` (Anthropic) | Claude (Copilot) | 透传 | ✅ 已通 |
-| Claude Code | `/v1/messages` (Anthropic) | Claude (Anthropic) | 透传 | ✅ 已通 |
-| Claude Code | `/v1/messages` (Anthropic) | GPT (ChatGPT sub) | Messages→Responses 转换 | ❌ Phase 2 |
-| Claude Code | `/v1/messages` (Anthropic) | GPT (Copilot) | Messages→Responses 转换 | ❌ Phase 2 |
-| Codex CLI | `/v1/responses` (OpenAI) | GPT (ChatGPT sub) | 透传 | ✅ 已通 |
-| Codex CLI | `/v1/responses` (OpenAI) | GPT (Copilot) | 透传 | ✅ 已通 |
-| Codex CLI | `/v1/responses` (OpenAI) | Claude (Copilot) | Responses→Messages 转换 | ❌ Phase 1 |
-| Codex CLI | `/v1/responses` (OpenAI) | Claude (Anthropic) | Responses→Messages 转换 | ❌ Phase 1 |
+| Claude Code | `/v1/messages` (Anthropic) | Claude (Copilot) | 透传 | ✅ 已完成 |
+| Claude Code | `/v1/messages` (Anthropic) | Claude (Anthropic) | 透传 | ✅ 已完成 |
+| Claude Code | `/v1/messages` (Anthropic) | GPT (ChatGPT sub) | Messages→Responses 转换 | ✅ Phase 2 已完成 |
+| Claude Code | `/v1/messages` (Anthropic) | GPT (Copilot) | Messages→Responses 转换 | ✅ Phase 2 已完成 |
+| Codex CLI | `/v1/responses` (OpenAI) | GPT (ChatGPT sub) | 透传 | ✅ 已完成 |
+| Codex CLI | `/v1/responses` (OpenAI) | GPT (Copilot) | 透传 | ✅ 已完成 |
+| Codex CLI | `/v1/responses` (OpenAI) | Claude (Copilot) | Responses→Messages 转换 | ✅ Phase 1 已完成 |
+| Codex CLI | `/v1/responses` (OpenAI) | Claude (Anthropic) | Responses→Messages 转换 | ✅ Phase 1 已完成 |
 
 ## 协议差异概览
 
@@ -110,12 +110,13 @@ cc-switch 项目 (`github.com/farion1231/cc-switch`) 有完整实现：
 
 ## 开发顺序
 
-1. Phase 1A: 非流式 Responses→Messages 转换 + 测试
-2. Phase 1B: 流式 Messages SSE → Responses SSE 转换 + 测试
-3. Phase 1C: Copilot provider `proxy_responses()` 集成
-4. Phase 2A: 非流式 Messages→Responses 转换 + 测试
-5. Phase 2B: 流式 Responses SSE → Messages SSE 转换 + 测试
-6. Phase 2C: ChatGPT provider `proxy_messages()` 集成
+1. Phase 1A: 非流式 Responses→Messages 转换 + 测试 ✅
+2. Phase 1B: 流式 Messages SSE → Responses SSE 转换 + 测试 ✅
+3. Phase 1C: Copilot provider `proxy_responses()` 集成 ✅
+4. Phase 2A: 非流式 Messages→Responses 转换 + 测试 ✅
+5. Phase 2B: 流式 Responses SSE → Messages SSE 转换 + 测试 ✅
+6. Phase 2C: ChatGPT provider `proxy_messages()` 集成 ✅
+7. True SSE Streaming: async-stream Stream→Stream 适配器，零缓冲逐事件中继 ✅
 
 ## 工具调用映射
 
@@ -141,3 +142,6 @@ Codex CLI 的 tool calling 对 agent 功能至关重要，不能省略。
 ## 日期
 - 计划确认：2026-04-03
 - 参考项目分析完成：2026-04-03
+- Phase 1 实现完成：2026-04-04
+- Phase 2 实现完成：2026-04-04
+- True SSE Streaming 实现完成：2026-04-04（commit 078eb3e）

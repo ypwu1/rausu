@@ -13,7 +13,7 @@ The `chatgpt-subscription` provider lets you route requests through your ChatGPT
 | `POST /v1/chat/completions` | ✅ (streaming + non-streaming, bridged to Responses API) |
 | `POST /v1/responses` | ✅ native Responses API passthrough |
 | `GET /v1/models` | ✅ lists configured model names |
-| `POST /v1/messages` | ❌ Anthropic Messages API not supported |
+| `POST /v1/messages` | ✅ GPT models: Messages→Responses bridge; Claude models: not supported |
 
 ## Prerequisites
 
@@ -240,10 +240,35 @@ docker run \
 
 In `config.yaml`, add `credentials_path: /app/chatgpt-auth.json`, or use the `CHATGPT_ACCESS_TOKEN` environment variable approach.
 
+## Using with Claude Code (GPT models via protocol bridge)
+
+Claude Code sends requests to `/v1/messages`.  When the configured model is a GPT model,
+Rausu automatically bridges Messages API → Responses API and forwards to the ChatGPT
+Responses endpoint.
+
+```yaml
+models:
+  # Claude Code can use this GPT model via /v1/messages
+  - name: gpt-5.4
+    providers:
+      - provider: chatgpt-subscription
+        model: gpt-5.4
+        token_source: auto
+```
+
+```bash
+export ANTHROPIC_BASE_URL="http://localhost:4000"
+export ANTHROPIC_API_KEY="local-proxy"
+# In Claude Code settings, select gpt-5.4 as the model
+```
+
+Rausu converts the Messages API request to Responses format, proxies to ChatGPT, then
+converts the response back to Messages format — including SSE streaming with zero
+buffering.  Full tool calling (`tool_use` ↔ `function_call`) is supported.
+
 ## Known limitations
 
-- **No `/v1/messages` support.** Use `provider: anthropic` or `provider: claude-subscription` for Anthropic-native routing.
+- **Messages API: GPT models only.** Claude models are not available via `chatgpt-subscription`; use `provider: anthropic`, `provider: claude-subscription`, or `provider: github-copilot` for Claude.
 - **Subscription rate limits** and model availability are controlled by OpenAI — Rausu propagates the upstream HTTP status code unchanged.
-- **No tool/function calling translation** between the Chat Completions and Responses API formats.
 - **Token acquisition is manual.** Unlike GitHub Copilot, there is no automated device-flow login. You must obtain and place the token in the credentials file yourself.
 - The `base_url` config field is not applicable for this provider; the endpoint is always `https://chatgpt.com/backend-api/codex/responses`.

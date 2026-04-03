@@ -88,6 +88,10 @@ Rausu solves these by being a **zero-overhead proxy** — it adds microseconds, 
 - ✅ **Provider Abstraction** — Unified trait system; each provider translates to/from OpenAI format
 - ✅ **OpenAI Provider** — Full chat completions with streaming
 - ✅ **Anthropic Provider** — Automatic OpenAI ↔ Anthropic Messages API translation
+- ✅ **GitHub Copilot Provider** — Claude and GPT models via your Copilot subscription
+- ✅ **ChatGPT Subscription Provider** — GPT models via your ChatGPT Plus/Pro/Max subscription
+- ✅ **Protocol Bridge** — Bi-directional Responses API ↔ Messages API conversion; Codex CLI can use Claude models, Claude Code can use GPT models; full tool calling and thinking block support
+- ✅ **True SSE Streaming** — Zero-buffer per-event streaming on all paths including protocol bridge; first-token latency matches passthrough
 - ✅ **SSE Streaming** — Chunk-by-chunk relay with proper `data: [DONE]` termination
 - ✅ **Structured Logging** — JSON logs with request ID, model, provider, latency, tokens
 - ✅ **YAML Configuration** — Environment variable interpolation, sensible defaults
@@ -265,9 +269,9 @@ Adding a new provider? Implement the `Provider` trait — see [CONTRIBUTING.md](
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | `POST` | `/v1/chat/completions` | Chat completions (streaming & non-streaming) |
-| `POST` | `/v1/responses` | OpenAI Responses API — transparent passthrough (Codex CLI) |
+| `POST` | `/v1/responses` | OpenAI Responses API — passthrough or Responses→Messages bridge |
 | `POST` | `/v1/responses/compact` | OpenAI Responses API compact variant — transparent passthrough |
-| `POST` | `/v1/messages` | Anthropic Messages API — transparent passthrough (Claude Code) |
+| `POST` | `/v1/messages` | Anthropic Messages API — passthrough or Messages→Responses bridge |
 | `GET` | `/v1/models` | List configured models |
 | `GET` | `/health` | Health check |
 
@@ -286,9 +290,33 @@ Adding a new provider? Implement the `Provider` trait — see [CONTRIBUTING.md](
 
 ---
 
+## Protocol Bridge
+
+Rausu implements a bi-directional protocol bridge between the OpenAI Responses API and the Anthropic Messages API. This enables any client × model combination:
+
+| Client | Protocol | Model | Path |
+|--------|---------|-------|------|
+| Claude Code | `/v1/messages` | Claude (Copilot) | Passthrough |
+| Claude Code | `/v1/messages` | Claude (Anthropic) | Passthrough |
+| Claude Code | `/v1/messages` | GPT (ChatGPT sub) | Messages→Responses bridge |
+| Codex CLI | `/v1/responses` | GPT (ChatGPT sub) | Passthrough |
+| Codex CLI | `/v1/responses` | GPT (Copilot) | Passthrough |
+| Codex CLI | `/v1/responses` | Claude (Copilot) | Responses→Messages bridge |
+
+**Bridge features:**
+- Full tool calling support — `function_call` ↔ `tool_use` with argument JSON serialization
+- Thinking/reasoning block conversion — `reasoning` ↔ `thinking`
+- True SSE streaming — zero-buffer per-event relay using async-stream; first-token latency matches passthrough paths
+- Automatic detection — bridge activates based on provider+model combination, no client config needed
+
+See [PROTOCOL_BRIDGE_PLAN.md](PROTOCOL_BRIDGE_PLAN.md) ([中文](PROTOCOL_BRIDGE_PLAN_CN.md)) for full protocol mapping details.
+
 ## Design Documents
 
-- [Local Proxy Usage Guide](LOCAL_PROXY_USAGE.md) ([中文](LOCAL_PROXY_USAGE_CN.md)) — connecting Codex CLI and Claude Code
+- [Local Proxy Usage Guide](LOCAL_PROXY_USAGE.md) ([中文](LOCAL_PROXY_USAGE_CN.md)) — connecting Codex CLI and Claude Code, including cross-protocol usage
+- [Protocol Bridge Plan](PROTOCOL_BRIDGE_PLAN.md) ([中文](PROTOCOL_BRIDGE_PLAN_CN.md)) — Responses ↔ Messages API conversion
+- [GitHub Copilot Provider](GITHUB_COPILOT_PROVIDER.md) ([中文](GITHUB_COPILOT_PROVIDER_CN.md))
+- [ChatGPT Subscription Provider](CHATGPT_SUBSCRIPTION_PROVIDER.md) ([中文](CHATGPT_SUBSCRIPTION_PROVIDER_CN.md))
 - [Architecture Direction — Local-First, Gateway-Compatible](ARCHITECTURE_DIRECTION.md) ([中文](ARCHITECTURE_DIRECTION_CN.md))
 - [ChatGPT Subscription Provider Design](CHATGPT_SUBSCRIPTION_DESIGN.md)
 - [Anthropic Messages API Proxy Design](MESSAGES_API_PROXY_DESIGN.md)
