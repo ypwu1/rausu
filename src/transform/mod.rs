@@ -252,7 +252,7 @@ fn flush_message(
         if !current_content.is_empty() {
             messages.push(json!({
                 "role": role,
-                "content": current_content.drain(..).collect::<Vec<_>>()
+                "content": std::mem::take(current_content)
             }));
         }
     }
@@ -351,7 +351,7 @@ pub fn messages_to_responses_response(body: &Value) -> Value {
                             "id": format!("msg_{}", Uuid::new_v4().simple()),
                             "role": "assistant",
                             "status": "completed",
-                            "content": message_content.drain(..).collect::<Vec<_>>()
+                            "content": std::mem::take(&mut message_content)
                         }));
                     }
 
@@ -917,7 +917,7 @@ fn convert_user_message(input: &mut Vec<Value>, content: Option<&Value>) {
                         input.push(json!({
                             "type": "message",
                             "role": "user",
-                            "content": text_parts.drain(..).collect::<Vec<_>>()
+                            "content": std::mem::take(&mut text_parts)
                         }));
                     }
 
@@ -1001,7 +1001,7 @@ fn convert_assistant_message(input: &mut Vec<Value>, content: Option<&Value>) {
                         input.push(json!({
                             "type": "message",
                             "role": "assistant",
-                            "content": text_parts.drain(..).collect::<Vec<_>>()
+                            "content": std::mem::take(&mut text_parts)
                         }));
                     }
 
@@ -1118,13 +1118,10 @@ pub fn responses_to_messages_response(body: &Value) -> Value {
                         for part in parts {
                             let part_type =
                                 part.get("type").and_then(|v| v.as_str()).unwrap_or("");
-                            match part_type {
-                                "output_text" => {
+                            if part_type == "output_text" {
                                     let text =
                                         part.get("text").and_then(|v| v.as_str()).unwrap_or("");
                                     content.push(json!({"type": "text", "text": text}));
-                                }
-                                _ => {}
                             }
                         }
                     }
