@@ -34,7 +34,7 @@ const CHATGPT_ACCOUNT_ID_ENV: &str = "CHATGPT_ACCOUNT_ID";
 const DEFAULT_CREDENTIALS_RELATIVE: &str = ".config/rausu/chatgpt-auth.json";
 
 /// Token endpoint for refresh grants.
-const TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
+const TOKEN_ENDPOINT: &str = "https://auth0.openai.com/oauth/token";
 
 /// OAuth client ID used by the ChatGPT pi client.
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
@@ -43,7 +43,7 @@ const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 const JWT_AUTH_NS: &str = "https://api.openai.com/auth";
 
 /// OpenAI Device Flow: request a device code.
-const DEVICE_CODE_URL: &str = "https://auth.openai.com/oauth/device/code";
+const DEVICE_CODE_URL: &str = "https://auth0.openai.com/oauth/device/code";
 
 /// Audience for the OpenAI Device Flow token request.
 const DEVICE_AUDIENCE: &str = "https://api.openai.com/v1";
