@@ -3,9 +3,6 @@
 //! This is the first-class path for Codex CLI via ChatGPT subscription.
 //! Requests are forwarded as-is to the upstream Responses API with auth
 //! and identity headers injected by the provider.
-//!
-//! Uses raw body extraction (not Axum's `Json<Value>`) to handle edge
-//! cases such as Codex CLI WebSocket→HTTPS fallback sending unusual bodies.
 
 use axum::{
     body::Body,
@@ -15,111 +12,30 @@ use axum::{
     Json,
 };
 use serde_json::Value;
-use tracing::{debug, error, info, warn};
+use tracing::{error, info, warn};
 
 use crate::schema::error::ErrorResponse;
 use crate::server::AppState;
 
-/// Maximum request body size (200 MB).
-const MAX_BODY_SIZE: usize = 200 * 1024 * 1024;
-
-/// Extract raw body bytes from a request, log diagnostics, and parse as JSON.
-async fn extract_json_body(request: axum::extract::Request) -> Result<Value, Response> {
-    let (parts, body) = request.into_parts();
-    let headers = &parts.headers;
-
-    let content_type = headers
-        .get("content-type")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("<missing>");
-    let content_encoding = headers
-        .get("content-encoding")
-        .and_then(|v| v.to_str().ok());
-
-    let body_bytes = match axum::body::to_bytes(body, MAX_BODY_SIZE).await {
-        Ok(b) => b,
-        Err(e) => {
-            error!(error = %e, "Failed to read request body");
-            return Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::invalid_request(format!(
-                    "Failed to read request body: {e}"
-                ))),
-            )
-                .into_response());
-        }
-    };
-
-    debug!(
-        body_len = body_bytes.len(),
-        content_type = content_type,
-        content_encoding = content_encoding.unwrap_or("<none>"),
-        method = %parts.method,
-        uri = %parts.uri,
-        "Received /v1/responses request"
-    );
-
-    if body_bytes.is_empty() {
-        warn!("Empty request body on /v1/responses");
-        return Err((
-            StatusCode::BAD_REQUEST,
-            Json(ErrorResponse::invalid_request(
-                "Empty request body. If using Codex CLI, ensure OPENAI_BASE_URL is set correctly (e.g. http://localhost:4000/v1)."
-            )),
-        )
-            .into_response());
-    }
-
-    // Try parsing as JSON directly.
-    match serde_json::from_slice::<Value>(&body_bytes) {
-        Ok(v) => Ok(v),
-        Err(json_err) => {
-            // Log diagnostic info for debugging.
-            let preview: String = body_bytes
-                .iter()
-                .take(100)
-                .map(|b| format!("{:02x}", b))
-                .collect::<Vec<_>>()
-                .join(" ");
-            warn!(
-                body_len = body_bytes.len(),
-                body_preview_hex = %preview,
-                error = %json_err,
-                "Failed to parse request body as JSON"
-            );
-            Err((
-                StatusCode::BAD_REQUEST,
-                Json(ErrorResponse::invalid_request(format!(
-                    "Failed to parse the request body as JSON: {json_err} (body length: {} bytes, first bytes hex: {preview})",
-                    body_bytes.len()
-                ))),
-            )
-                .into_response())
-        }
-    }
-}
-
 /// POST /v1/responses — proxy requests to a Responses-API-capable provider.
-pub async fn responses(
-    State(state): State<AppState>,
-    request: axum::extract::Request,
-) -> Response {
-    let mut body = match extract_json_body(request).await {
-        Ok(b) => b,
-        Err(resp) => return resp,
-    };
+///
+/// Accepts native OpenAI Responses API format and forwards it transparently
+/// to the configured provider (e.g. `chatgpt-subscription`), injecting the
+/// appropriate authentication headers. The response (streaming or not) is
+/// byte-proxied back to the client without modification.
+pub async fn responses(State(state): State<AppState>, Json(mut body): Json<Value>) -> Response {
     handle_responses(state, &mut body).await
 }
 
 /// POST /v1/responses/compact — same passthrough as /v1/responses.
+///
+/// The ChatGPT backend does not expose a separate "compact" endpoint, so
+/// this route forwards to the same upstream. Clients requesting compact
+/// responses will receive standard (non-compact) output.
 pub async fn responses_compact(
     State(state): State<AppState>,
-    request: axum::extract::Request,
+    Json(mut body): Json<Value>,
 ) -> Response {
-    let mut body = match extract_json_body(request).await {
-        Ok(b) => b,
-        Err(resp) => return resp,
-    };
     handle_responses(state, &mut body).await
 }
 
@@ -185,6 +101,8 @@ async fn handle_responses(state: AppState, body: &mut Value) -> Response {
     // Byte-proxy the upstream response — no parsing or rewriting.
     let upstream_status = upstream.status();
 
+    // Preserve content-type from upstream if present; fall back to a sensible default.
+    // For error responses the upstream sends JSON regardless of the stream flag.
     let content_type = upstream
         .headers()
         .get(axum::http::header::CONTENT_TYPE)
@@ -200,93 +118,138 @@ async fn handle_responses(state: AppState, body: &mut Value) -> Response {
         info!(
             model = %model_name,
             provider = %provider_name,
+            status = upstream_status.as_u16(),
             stream = is_stream,
-            "Responses proxy success"
+            "Responses proxy succeeded"
         );
     } else {
         warn!(
             model = %model_name,
             provider = %provider_name,
             status = upstream_status.as_u16(),
+            stream = is_stream,
             "Upstream returned non-2xx for responses proxy"
         );
     }
 
-    let stream = upstream.bytes_stream();
-    Response::builder()
-        .status(upstream_status)
-        .header(axum::http::header::CONTENT_TYPE, content_type)
-        .body(Body::from_stream(stream))
-        .unwrap_or_else(|_| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Failed to build response",
-            )
-                .into_response()
-        })
+    (
+        upstream_status,
+        [(axum::http::header::CONTENT_TYPE, content_type)],
+        Body::from_stream(upstream.bytes_stream()),
+    )
+        .into_response()
 }
-
 
 // ── Unit tests ────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::pin::Pin;
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
     use axum::{body::Body, routing::post, Router};
-    use http::Request;
-    use tower::ServiceExt;
+    use futures::Stream;
 
-    /// Minimal stub provider that always returns Unsupported for proxy_responses.
-    struct StubProvider;
+    use crate::providers::{Provider, ProviderError};
+    use crate::schema::chat::{
+        ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ModelInfo,
+    };
+    use crate::server::AppState;
 
-    #[async_trait::async_trait]
-    impl crate::providers::Provider for StubProvider {
+    /// A stub provider with no capabilities — `proxy_responses` uses the default (Unsupported).
+    struct StubProvider {
+        provider_name: &'static str,
+    }
+
+    #[async_trait]
+    impl Provider for StubProvider {
         fn name(&self) -> &str {
-            "stub"
+            self.provider_name
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            vec![]
         }
 
         async fn chat_completions(
             &self,
-            _req: crate::schema::chat::ChatCompletionRequest,
-        ) -> Result<crate::schema::chat::ChatCompletionResponse, crate::providers::ProviderError>
-        {
-            unimplemented!()
+            _req: ChatCompletionRequest,
+        ) -> Result<ChatCompletionResponse, ProviderError> {
+            Err(ProviderError::Unsupported("stub".to_string()))
         }
 
         async fn chat_completions_stream(
             &self,
-            _req: crate::schema::chat::ChatCompletionRequest,
+            _req: ChatCompletionRequest,
         ) -> Result<
-            std::pin::Pin<
-                Box<
-                    dyn futures::Stream<
-                            Item = Result<
-                                crate::schema::chat::ChatCompletionChunk,
-                                crate::providers::ProviderError,
-                            >,
-                        > + Send,
-                >,
-            >,
-            crate::providers::ProviderError,
+            Pin<Box<dyn Stream<Item = Result<ChatCompletionChunk, ProviderError>> + Send>>,
+            ProviderError,
         > {
-            unimplemented!()
+            Err(ProviderError::Unsupported("stub".to_string()))
+        }
+        // proxy_responses uses the default (Unsupported) implementation.
+    }
+
+    /// A stub provider that claims Responses API capability by returning a synthetic 200.
+    struct ResponsesCapableStubProvider {
+        provider_name: &'static str,
+    }
+
+    #[async_trait]
+    impl Provider for ResponsesCapableStubProvider {
+        fn name(&self) -> &str {
+            self.provider_name
         }
 
-        fn models(&self) -> Vec<crate::schema::chat::ModelInfo> {
+        fn models(&self) -> Vec<ModelInfo> {
             vec![]
+        }
+
+        async fn chat_completions(
+            &self,
+            _req: ChatCompletionRequest,
+        ) -> Result<ChatCompletionResponse, ProviderError> {
+            Err(ProviderError::Unsupported("stub".to_string()))
+        }
+
+        async fn chat_completions_stream(
+            &self,
+            _req: ChatCompletionRequest,
+        ) -> Result<
+            Pin<Box<dyn Stream<Item = Result<ChatCompletionChunk, ProviderError>> + Send>>,
+            ProviderError,
+        > {
+            Err(ProviderError::Unsupported("stub".to_string()))
+        }
+
+        async fn proxy_responses(
+            &self,
+            _body: serde_json::Value,
+            _is_stream: bool,
+        ) -> Result<reqwest::Response, ProviderError> {
+            let http_resp = axum::http::Response::builder()
+                .status(200)
+                .header("content-type", "application/json")
+                .body(bytes::Bytes::from(r#"{"id":"resp_test"}"#))
+                .unwrap();
+            Ok(reqwest::Response::from(http_resp))
         }
     }
 
-    fn build_app(provider_name: &str, model_name: &str) -> Router {
-        let providers: Vec<Box<dyn crate::providers::Provider>> = vec![Box::new(StubProvider)];
-        let mut registry = std::collections::HashMap::new();
-        registry.insert(
-            model_name.to_string(),
-            (provider_name.to_string(), model_name.to_string()),
-        );
+    fn make_app(
+        providers: Vec<Box<dyn Provider>>,
+        registry: Vec<(String, String, String)>,
+    ) -> Router {
+        let mut map = std::collections::HashMap::new();
+        for (name, pname, pmodel) in registry {
+            map.insert(name, (pname, pmodel));
+        }
         let state = AppState {
-            providers: std::sync::Arc::new(providers),
-            model_registry: std::sync::Arc::new(registry),
+            providers: Arc::new(providers),
+            model_registry: Arc::new(map),
         };
         Router::new()
             .route("/v1/responses", post(responses))
@@ -294,161 +257,215 @@ mod tests {
             .with_state(state)
     }
 
-    async fn post_json(app: Router, path: &str, json: &str) -> (StatusCode, String) {
-        let req = Request::builder()
+    async fn post_json(app: Router, uri: &str, body: &str) -> axum::http::Response<Body> {
+        use tower::ServiceExt;
+        let request = axum::http::Request::builder()
             .method("POST")
-            .uri(path)
+            .uri(uri)
             .header("content-type", "application/json")
-            .body(Body::from(json.to_string()))
+            .body(Body::from(body.to_string()))
             .unwrap();
-        let resp = app.oneshot(req).await.unwrap();
-        let status = resp.status();
-        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
-        (status, String::from_utf8_lossy(&body).to_string())
+        app.oneshot(request).await.unwrap()
     }
 
     #[tokio::test]
-    async fn missing_model_returns_400() {
-        let app = build_app("stub", "test-model");
-        let (status, _body) = post_json(app, "/v1/responses", r#"{"input": "Hello"}"#).await;
-        assert_eq!(status, StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn unknown_model_returns_404() {
-        let app = build_app("stub", "known-model");
-        let (status, _body) = post_json(
-            app,
-            "/v1/responses",
-            r#"{"model": "unknown-model", "input": "Hello"}"#,
-        )
-        .await;
-        assert_eq!(status, StatusCode::NOT_FOUND);
-    }
-
-    #[tokio::test]
-    async fn unsupported_provider_returns_405() {
-        let app = build_app("stub", "test-model");
-        let (status, body) = post_json(
-            app,
-            "/v1/responses",
-            r#"{"model": "test-model", "input": "Hello"}"#,
-        )
-        .await;
-        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
-        assert!(body.contains("does not support the Responses API"));
-    }
-
-    #[tokio::test]
-    async fn empty_body_returns_400() {
-        let app = build_app("stub", "test-model");
-        let req = Request::builder()
-            .method("POST")
-            .uri("/v1/responses")
-            .header("content-type", "application/json")
-            .body(Body::empty())
-            .unwrap();
-        let resp = app.oneshot(req).await.unwrap();
+    async fn test_missing_model_field_returns_400() {
+        let app = make_app(vec![], vec![]);
+        let resp = post_json(app, "/v1/responses", r#"{"input": "Hello"}"#).await;
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
-        let body = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
-            .await
-            .unwrap();
-        let body_str = String::from_utf8_lossy(&body);
-        assert!(body_str.contains("Empty request body"));
     }
 
-    /// A provider that returns a canned Responses API reply.
-    struct EchoProvider;
+    #[tokio::test]
+    async fn test_unknown_model_returns_404() {
+        let app = make_app(vec![], vec![]);
+        let resp = post_json(
+            app,
+            "/v1/responses",
+            r#"{"model": "no-such-model", "input": "Hello"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
+    }
 
-    #[async_trait::async_trait]
-    impl crate::providers::Provider for EchoProvider {
+    #[tokio::test]
+    async fn test_unsupported_provider_returns_405() {
+        // StubProvider does not override proxy_responses, so it returns Unsupported → 405.
+        let app = make_app(
+            vec![Box::new(StubProvider {
+                provider_name: "anthropic",
+            })],
+            vec![(
+                "claude-3".to_string(),
+                "anthropic".to_string(),
+                "claude-3-haiku".to_string(),
+            )],
+        );
+        let resp = post_json(
+            app,
+            "/v1/responses",
+            r#"{"model": "claude-3", "input": "Hello"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+    }
+
+    #[tokio::test]
+    async fn test_chatgpt_subscription_provider_returns_200() {
+        let app = make_app(
+            vec![Box::new(ResponsesCapableStubProvider {
+                provider_name: "chatgpt-subscription",
+            })],
+            vec![(
+                "gpt-5.4".to_string(),
+                "chatgpt-subscription".to_string(),
+                "gpt-5.4".to_string(),
+            )],
+        );
+        let resp = post_json(
+            app,
+            "/v1/responses",
+            r#"{"model": "gpt-5.4", "input": "Hello"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_openai_provider_returns_200() {
+        let app = make_app(
+            vec![Box::new(ResponsesCapableStubProvider {
+                provider_name: "openai",
+            })],
+            vec![(
+                "gpt-4o".to_string(),
+                "openai".to_string(),
+                "gpt-4o".to_string(),
+            )],
+        );
+        let resp = post_json(
+            app,
+            "/v1/responses",
+            r#"{"model": "gpt-4o", "input": "Hello"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    /// A stub provider that returns a synthetic upstream error (e.g. 429 rate limit).
+    struct UpstreamErrorStubProvider {
+        provider_name: &'static str,
+        upstream_status: u16,
+    }
+
+    #[async_trait]
+    impl Provider for UpstreamErrorStubProvider {
         fn name(&self) -> &str {
-            "echo"
+            self.provider_name
+        }
+
+        fn models(&self) -> Vec<ModelInfo> {
+            vec![]
         }
 
         async fn chat_completions(
             &self,
-            _req: crate::schema::chat::ChatCompletionRequest,
-        ) -> Result<crate::schema::chat::ChatCompletionResponse, crate::providers::ProviderError>
-        {
-            unimplemented!()
+            _req: ChatCompletionRequest,
+        ) -> Result<ChatCompletionResponse, ProviderError> {
+            Err(ProviderError::Unsupported("stub".to_string()))
         }
 
         async fn chat_completions_stream(
             &self,
-            _req: crate::schema::chat::ChatCompletionRequest,
+            _req: ChatCompletionRequest,
         ) -> Result<
-            std::pin::Pin<
-                Box<
-                    dyn futures::Stream<
-                            Item = Result<
-                                crate::schema::chat::ChatCompletionChunk,
-                                crate::providers::ProviderError,
-                            >,
-                        > + Send,
-                >,
-            >,
-            crate::providers::ProviderError,
+            Pin<Box<dyn Stream<Item = Result<ChatCompletionChunk, ProviderError>> + Send>>,
+            ProviderError,
         > {
-            unimplemented!()
+            Err(ProviderError::Unsupported("stub".to_string()))
         }
 
         async fn proxy_responses(
             &self,
             _body: serde_json::Value,
             _is_stream: bool,
-        ) -> Result<reqwest::Response, crate::providers::ProviderError> {
-            let http_resp = http::Response::builder()
-                .status(200)
+        ) -> Result<reqwest::Response, ProviderError> {
+            let http_resp = axum::http::Response::builder()
+                .status(self.upstream_status)
                 .header("content-type", "application/json")
-                .body(bytes::Bytes::from(r#"{"id":"resp_1","output":[{"type":"message","content":[{"type":"output_text","text":"hi"}]}]}"#))
+                .body(bytes::Bytes::from(r#"{"error":"upstream error"}"#))
                 .unwrap();
             Ok(reqwest::Response::from(http_resp))
         }
-
-        fn models(&self) -> Vec<crate::schema::chat::ModelInfo> {
-            vec![]
-        }
     }
 
     #[tokio::test]
-    async fn successful_proxy_returns_upstream_body() {
-        let providers: Vec<Box<dyn crate::providers::Provider>> = vec![Box::new(EchoProvider)];
-        let mut registry = std::collections::HashMap::new();
-        registry.insert(
-            "test-model".to_string(),
-            ("echo".to_string(), "test-model".to_string()),
+    async fn test_upstream_error_status_is_proxied_through() {
+        // Upstream returns 429; the route must proxy it through, not replace with 500.
+        let app = make_app(
+            vec![Box::new(UpstreamErrorStubProvider {
+                provider_name: "openai",
+                upstream_status: 429,
+            })],
+            vec![(
+                "gpt-4o".to_string(),
+                "openai".to_string(),
+                "gpt-4o".to_string(),
+            )],
         );
-        let state = AppState {
-            providers: std::sync::Arc::new(providers),
-            model_registry: std::sync::Arc::new(registry),
-        };
-        let app = Router::new()
-            .route("/v1/responses", post(responses))
-            .with_state(state);
-
-        let (status, body) = post_json(
+        let resp = post_json(
             app,
             "/v1/responses",
-            r#"{"model": "test-model", "input": "Hello"}"#,
+            r#"{"model": "gpt-4o", "input": "Hello"}"#,
         )
         .await;
-        assert_eq!(status, StatusCode::OK);
-        assert!(body.contains("resp_1"));
+        assert_eq!(resp.status(), StatusCode::TOO_MANY_REQUESTS);
     }
 
     #[tokio::test]
-    async fn compact_route_works() {
-        let app = build_app("stub", "test-model");
-        let (status, body) = post_json(
+    async fn test_upstream_content_type_is_preserved() {
+        // When upstream sets a specific content-type, it should be forwarded.
+        let app = make_app(
+            vec![Box::new(ResponsesCapableStubProvider {
+                provider_name: "openai",
+            })],
+            vec![(
+                "gpt-4o".to_string(),
+                "openai".to_string(),
+                "gpt-4o".to_string(),
+            )],
+        );
+        let resp = post_json(
             app,
-            "/v1/responses/compact",
-            r#"{"model": "test-model", "input": "Hello"}"#,
+            "/v1/responses",
+            r#"{"model": "gpt-4o", "input": "Hello"}"#,
         )
         .await;
-        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
-        assert!(body.contains("does not support the Responses API"));
+        assert_eq!(resp.status(), StatusCode::OK);
+        let ct = resp
+            .headers()
+            .get("content-type")
+            .unwrap()
+            .to_str()
+            .unwrap();
+        assert_eq!(ct, "application/json");
+    }
+
+    #[tokio::test]
+    async fn test_compact_missing_model_returns_400() {
+        let app = make_app(vec![], vec![]);
+        let resp = post_json(app, "/v1/responses/compact", r#"{"input": "Hello"}"#).await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_compact_unknown_model_returns_404() {
+        let app = make_app(vec![], vec![]);
+        let resp = post_json(
+            app,
+            "/v1/responses/compact",
+            r#"{"model": "no-such-model", "input": "Hello"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::NOT_FOUND);
     }
 }
