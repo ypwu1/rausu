@@ -696,8 +696,8 @@ impl Provider for GitHubCopilotProvider {
                 // Non-streaming: parse Messages response, convert to Responses format.
                 let messages_resp: serde_json::Value = upstream.json().await?;
                 let responses_resp = transform::messages_to_responses_response(&messages_resp);
-                let json = serde_json::to_string(&responses_resp)
-                    .map_err(ProviderError::Serialisation)?;
+                let json =
+                    serde_json::to_string(&responses_resp).map_err(ProviderError::Serialisation)?;
                 http::Response::builder()
                     .status(200u16)
                     .header("content-type", "application/json")

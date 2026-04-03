@@ -67,10 +67,8 @@ pub fn responses_to_messages_request(body: &Value) -> Value {
 
     // tools
     if let Some(Value::Array(tools)) = body.get("tools") {
-        let anthropic_tools: Vec<Value> = tools
-            .iter()
-            .filter_map(convert_tool_definition)
-            .collect();
+        let anthropic_tools: Vec<Value> =
+            tools.iter().filter_map(convert_tool_definition).collect();
         if !anthropic_tools.is_empty() {
             req["tools"] = json!(anthropic_tools);
         }
@@ -231,7 +229,10 @@ fn convert_input_to_messages(input: Option<&Value>) -> Vec<Value> {
             "reasoning" => {}
 
             _ => {
-                warn!(item_type = item_type, "Unknown input item type in Responses request");
+                warn!(
+                    item_type = item_type,
+                    "Unknown input item type in Responses request"
+                );
             }
         }
     }
@@ -271,7 +272,10 @@ fn convert_tool_definition(tool: &Value) -> Option<Value> {
         .get("description")
         .and_then(|v| v.as_str())
         .unwrap_or("");
-    let parameters = tool.get("parameters").cloned().unwrap_or(json!({"type": "object"}));
+    let parameters = tool
+        .get("parameters")
+        .cloned()
+        .unwrap_or(json!({"type": "object"}));
 
     Some(json!({
         "name": name,
@@ -370,10 +374,7 @@ pub fn messages_to_responses_response(body: &Value) -> Value {
                     }));
                 }
                 "thinking" => {
-                    let thinking = block
-                        .get("thinking")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let thinking = block.get("thinking").and_then(|v| v.as_str()).unwrap_or("");
                     output.push(json!({
                         "type": "reasoning",
                         "id": format!("rs_{}", Uuid::new_v4().simple()),
@@ -415,7 +416,9 @@ pub fn messages_to_responses_response(body: &Value) -> Value {
         .pointer("/usage/output_tokens")
         .and_then(|v| v.as_u64())
         .unwrap_or(0);
-    let cache_read = body.pointer("/usage/cache_read_input_tokens").and_then(|v| v.as_u64());
+    let cache_read = body
+        .pointer("/usage/cache_read_input_tokens")
+        .and_then(|v| v.as_u64());
     let cache_creation = body
         .pointer("/usage/cache_creation_input_tokens")
         .and_then(|v| v.as_u64());
@@ -506,8 +509,14 @@ fn convert_message_start(data: &Value) -> Vec<(String, Value)> {
     });
 
     vec![
-        ("response.created".to_string(), json!({"type": "response.created", "response": response_obj.clone()})),
-        ("response.in_progress".to_string(), json!({"type": "response.in_progress", "response": response_obj})),
+        (
+            "response.created".to_string(),
+            json!({"type": "response.created", "response": response_obj.clone()}),
+        ),
+        (
+            "response.in_progress".to_string(),
+            json!({"type": "response.in_progress", "response": response_obj}),
+        ),
     ]
 }
 
@@ -634,10 +643,7 @@ fn convert_content_block_delta(data: &Value) -> Vec<(String, Value)> {
             )]
         }
         "thinking_delta" => {
-            let thinking = delta
-                .get("thinking")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let thinking = delta.get("thinking").and_then(|v| v.as_str()).unwrap_or("");
             vec![(
                 "response.reasoning.delta".to_string(),
                 json!({
@@ -717,7 +723,9 @@ fn convert_message_delta(data: &Value) -> Vec<(String, Value)> {
 ///
 /// Used by the streaming proxy to convert buffered Messages SSE into
 /// a complete Responses SSE text.
-pub fn format_responses_sse_events(events: &[(String, Value)]) -> Result<String, serde_json::Error> {
+pub fn format_responses_sse_events(
+    events: &[(String, Value)],
+) -> Result<String, serde_json::Error> {
     let mut output = String::new();
     for (event_name, data) in events {
         output.push_str("event: ");
@@ -1039,7 +1047,10 @@ fn convert_assistant_message(input: &mut Vec<Value>, content: Option<&Value>) {
 /// Convert an Anthropic tool definition to Responses API format.
 fn convert_anthropic_tool_to_responses(tool: &Value) -> Option<Value> {
     let name = tool.get("name").and_then(|v| v.as_str())?;
-    let description = tool.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let description = tool
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     let parameters = tool
         .get("input_schema")
         .cloned()
@@ -1116,22 +1127,17 @@ pub fn responses_to_messages_response(body: &Value) -> Value {
                 "message" => {
                     if let Some(Value::Array(parts)) = item.get("content") {
                         for part in parts {
-                            let part_type =
-                                part.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            let part_type = part.get("type").and_then(|v| v.as_str()).unwrap_or("");
                             if part_type == "output_text" {
-                                    let text =
-                                        part.get("text").and_then(|v| v.as_str()).unwrap_or("");
-                                    content.push(json!({"type": "text", "text": text}));
+                                let text = part.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                                content.push(json!({"type": "text", "text": text}));
                             }
                         }
                     }
                 }
                 "function_call" => {
                     has_tool_use = true;
-                    let call_id = item
-                        .get("call_id")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
                     let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
                     let arguments = item
                         .get("arguments")
@@ -1291,7 +1297,10 @@ fn convert_response_created(data: &Value) -> Vec<(String, Value)> {
 
 /// response.output_item.added → content_block_start
 fn convert_output_item_added(data: &Value) -> Vec<(String, Value)> {
-    let index = data.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0);
+    let index = data
+        .get("output_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let item = data.get("item").unwrap_or(data);
     let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
 
@@ -1307,10 +1316,7 @@ fn convert_output_item_added(data: &Value) -> Vec<(String, Value)> {
             )]
         }
         "function_call" => {
-            let tool_id = item
-                .get("call_id")
-                .and_then(|v| v.as_str())
-                .unwrap_or("");
+            let tool_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
             let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
 
             vec![(
@@ -1333,7 +1339,10 @@ fn convert_output_item_added(data: &Value) -> Vec<(String, Value)> {
 
 /// response.output_text.delta → content_block_delta (text_delta)
 fn convert_output_text_delta(data: &Value) -> Vec<(String, Value)> {
-    let index = data.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0);
+    let index = data
+        .get("output_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let text = data.get("delta").and_then(|v| v.as_str()).unwrap_or("");
 
     vec![(
@@ -1348,7 +1357,10 @@ fn convert_output_text_delta(data: &Value) -> Vec<(String, Value)> {
 
 /// response.function_call_arguments.delta → content_block_delta (input_json_delta)
 fn convert_function_call_arguments_delta(data: &Value) -> Vec<(String, Value)> {
-    let index = data.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0);
+    let index = data
+        .get("output_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
     let partial = data.get("delta").and_then(|v| v.as_str()).unwrap_or("");
 
     vec![(
@@ -1363,7 +1375,10 @@ fn convert_function_call_arguments_delta(data: &Value) -> Vec<(String, Value)> {
 
 /// response.content_part.done / response.output_item.done → content_block_stop
 fn convert_content_or_item_done(data: &Value) -> Vec<(String, Value)> {
-    let index = data.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0);
+    let index = data
+        .get("output_index")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
 
     vec![(
         "content_block_stop".to_string(),
@@ -1746,7 +1761,10 @@ mod tests {
         // First: reasoning item
         assert_eq!(output[0]["type"], "reasoning");
         assert_eq!(output[0]["summary"][0]["type"], "summary_text");
-        assert_eq!(output[0]["summary"][0]["text"], "Let me think about this...");
+        assert_eq!(
+            output[0]["summary"][0]["text"],
+            "Let me think about this..."
+        );
 
         // Second: message with text
         assert_eq!(output[1]["type"], "message");
@@ -2011,7 +2029,10 @@ data: {\"type\":\"message_stop\"}\n\
         assert_eq!(input[0]["type"], "message");
         assert_eq!(input[0]["role"], "user");
         assert_eq!(input[0]["content"][0]["type"], "input_text");
-        assert_eq!(input[0]["content"][0]["text"], "What is the capital of France?");
+        assert_eq!(
+            input[0]["content"][0]["text"],
+            "What is the capital of France?"
+        );
     }
 
     #[test]
@@ -2189,8 +2210,10 @@ data: {\"type\":\"message_stop\"}\n\
         assert_eq!(result["usage"]["input_tokens"], 10);
         assert_eq!(result["usage"]["output_tokens"], 8);
         // No total_tokens in Messages format
-        assert!(result["usage"].get("total_tokens").is_none()
-            || result["usage"]["total_tokens"].is_null());
+        assert!(
+            result["usage"].get("total_tokens").is_none()
+                || result["usage"]["total_tokens"].is_null()
+        );
     }
 
     #[test]
@@ -2320,8 +2343,7 @@ data: {\"type\":\"message_stop\"}\n\
             "delta": "{\"city\":"
         });
 
-        let events =
-            responses_sse_to_messages_sse("response.function_call_arguments.delta", &data);
+        let events = responses_sse_to_messages_sse("response.function_call_arguments.delta", &data);
 
         assert_eq!(events.len(), 1);
         assert_eq!(events[0].0, "content_block_delta");

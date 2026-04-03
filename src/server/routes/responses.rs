@@ -33,10 +33,7 @@ const MAX_BODY_SIZE: usize = 200 * 1024 * 1024;
 /// to the configured provider (e.g. `chatgpt-subscription`), injecting the
 /// appropriate authentication headers. The response (streaming or not) is
 /// byte-proxied back to the client without modification.
-pub async fn responses(
-    State(state): State<AppState>,
-    request: axum::extract::Request,
-) -> Response {
+pub async fn responses(State(state): State<AppState>, request: axum::extract::Request) -> Response {
     match extract_json_body(request).await {
         Ok(mut body) => handle_responses(state, &mut body).await,
         Err(resp) => resp,

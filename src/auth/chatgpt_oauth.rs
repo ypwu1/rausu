@@ -267,9 +267,9 @@ impl ChatGptOAuthTokenManager {
             ChatGptTokenSource::Env => self.load_from_env(),
             ChatGptTokenSource::CredentialsFile => self.load_from_credentials_file(),
             ChatGptTokenSource::Codex => self.load_from_codex_auth(),
-            ChatGptTokenSource::DeviceFlow => {
-                Err(anyhow::anyhow!("Device flow requires async; use load_or_login()"))
-            }
+            ChatGptTokenSource::DeviceFlow => Err(anyhow::anyhow!(
+                "Device flow requires async; use load_or_login()"
+            )),
             ChatGptTokenSource::Auto => {
                 if let Ok(token) = self.load_from_env() {
                     return Ok(token);
@@ -406,10 +406,7 @@ impl ChatGptOAuthTokenManager {
             .context("Could not determine home directory for Codex auth")?;
 
         let contents = std::fs::read_to_string(&path).with_context(|| {
-            format!(
-                "Failed to read Codex credentials file: {}",
-                path.display()
-            )
+            format!("Failed to read Codex credentials file: {}", path.display())
         })?;
 
         let codex: CodexCredentialsFile =
@@ -429,9 +426,7 @@ impl ChatGptOAuthTokenManager {
             .filter(|s| !s.is_empty())
             .or_else(|| extract_account_id_from_jwt(&access_token));
 
-        info!(
-            "Loaded ChatGPT credentials from Codex CLI (~/.codex/auth.json)"
-        );
+        info!("Loaded ChatGPT credentials from Codex CLI (~/.codex/auth.json)");
 
         Ok(ChatGptToken {
             access_token,
@@ -451,10 +446,7 @@ impl ChatGptOAuthTokenManager {
             .context("Could not determine home directory for Codex auth")?;
 
         let contents = std::fs::read_to_string(&path).with_context(|| {
-            format!(
-                "Failed to read Codex credentials file: {}",
-                path.display()
-            )
+            format!("Failed to read Codex credentials file: {}", path.display())
         })?;
 
         let codex: CodexCredentialsFile =
@@ -474,9 +466,7 @@ impl ChatGptOAuthTokenManager {
                 .filter(|s| !s.is_empty())
                 .or_else(|| extract_account_id_from_jwt(&access_token));
 
-            info!(
-                "Loaded ChatGPT credentials from Codex CLI (~/.codex/auth.json)"
-            );
+            info!("Loaded ChatGPT credentials from Codex CLI (~/.codex/auth.json)");
 
             return Ok(ChatGptToken {
                 access_token,
@@ -492,9 +482,7 @@ impl ChatGptOAuthTokenManager {
 
         info!("Codex auth.json has no access_token; attempting refresh");
         let token = self.do_refresh(&refresh_token).await?;
-        info!(
-            "Loaded ChatGPT credentials from Codex CLI (~/.codex/auth.json) via token refresh"
-        );
+        info!("Loaded ChatGPT credentials from Codex CLI (~/.codex/auth.json) via token refresh");
         Ok(token)
     }
 
@@ -590,14 +578,8 @@ pub async fn device_flow_login(client: &Client) -> Result<ChatGptToken> {
     println!("\u{2554}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2557}");
     println!("\u{2551}  ChatGPT Login Required                  \u{2551}");
     println!("\u{2560}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2563}");
-    println!(
-        "\u{2551}  Visit: {}",
-        DEVICE_VERIFY_URL
-    );
-    println!(
-        "\u{2551}  Enter code: {}",
-        dc.user_code
-    );
+    println!("\u{2551}  Visit: {}", DEVICE_VERIFY_URL);
+    println!("\u{2551}  Enter code: {}", dc.user_code);
     println!("\u{255a}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{255d}");
     println!();
 
@@ -623,20 +605,14 @@ pub async fn device_flow_login(client: &Client) -> Result<ChatGptToken> {
         let status = resp.status();
 
         // 403/404 = still pending
-        if status == reqwest::StatusCode::FORBIDDEN
-            || status == reqwest::StatusCode::NOT_FOUND
-        {
+        if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::NOT_FOUND {
             debug!("Authorization still pending ({})", status);
             continue;
         }
 
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "OpenAI device auth poll returned {}: {}",
-                status,
-                body
-            );
+            anyhow::bail!("OpenAI device auth poll returned {}: {}", status, body);
         }
 
         let dt: DeviceAuthTokenResponse = resp
@@ -674,11 +650,7 @@ pub async fn device_flow_login(client: &Client) -> Result<ChatGptToken> {
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!(
-            "OpenAI token exchange failed ({}): {}",
-            status,
-            body
-        );
+        anyhow::bail!("OpenAI token exchange failed ({}): {}", status, body);
     }
 
     let token_resp: TokenResponse = resp
@@ -703,9 +675,7 @@ pub async fn device_flow_login(client: &Client) -> Result<ChatGptToken> {
 
 /// Ensure that ChatGPT credentials are available, running device flow login
 /// if necessary. Call this at server startup before binding the listener.
-pub async fn ensure_chatgpt_credentials(
-    token_manager: &ChatGptOAuthTokenManager,
-) -> Result<()> {
+pub async fn ensure_chatgpt_credentials(token_manager: &ChatGptOAuthTokenManager) -> Result<()> {
     let _ = token_manager.load_or_login().await?;
     Ok(())
 }

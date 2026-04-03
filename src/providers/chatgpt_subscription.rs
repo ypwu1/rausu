@@ -561,10 +561,7 @@ fn aggregate_responses_sse_to_json(sse_text: &str) -> Value {
                     continue;
                 }
                 if let Ok(parsed) = serde_json::from_str::<Value>(&data) {
-                    let event_type = parsed
-                        .get("type")
-                        .and_then(|v| v.as_str())
-                        .unwrap_or("");
+                    let event_type = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
                     if event_type == "response.completed" || event_type == "response.done" {
                         if let Some(resp) = parsed.get("response") {
                             last_response = Some(resp.clone());
@@ -579,10 +576,7 @@ fn aggregate_responses_sse_to_json(sse_text: &str) -> Value {
     if let Some(data) = current_data {
         if data != "[DONE]" {
             if let Ok(parsed) = serde_json::from_str::<Value>(&data) {
-                let event_type = parsed
-                    .get("type")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("");
+                let event_type = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
                 if event_type == "response.completed" || event_type == "response.done" {
                     if let Some(resp) = parsed.get("response") {
                         last_response = Some(resp.clone());
@@ -744,8 +738,8 @@ impl Provider for ChatGptSubscriptionProvider {
         is_stream: bool,
         _client_betas: Option<String>,
     ) -> Result<reqwest::Response, ProviderError> {
-        use bytes::Bytes;
         use crate::transform;
+        use bytes::Bytes;
 
         let (token, account_id) = self
             .token_manager
@@ -759,11 +753,9 @@ impl Provider for ChatGptSubscriptionProvider {
         // ChatGPT Responses API requires stream: true, store: false, and other fields.
         responses_body["stream"] = serde_json::json!(true);
         responses_body["store"] = serde_json::json!(false);
-        if responses_body.get("instructions").is_none()
-            || responses_body["instructions"].is_null()
+        if responses_body.get("instructions").is_none() || responses_body["instructions"].is_null()
         {
-            responses_body["instructions"] =
-                serde_json::json!("You are a helpful assistant.");
+            responses_body["instructions"] = serde_json::json!("You are a helpful assistant.");
         }
 
         debug!("Sending Messages→Responses bridged request via chatgpt-subscription");
@@ -811,8 +803,8 @@ impl Provider for ChatGptSubscriptionProvider {
             // Parse the SSE to extract the final response.completed event
             let responses_resp = aggregate_responses_sse_to_json(&sse_text);
             let messages_resp = transform::responses_to_messages_response(&responses_resp);
-            let json = serde_json::to_string(&messages_resp)
-                .map_err(ProviderError::Serialisation)?;
+            let json =
+                serde_json::to_string(&messages_resp).map_err(ProviderError::Serialisation)?;
             http::Response::builder()
                 .status(200u16)
                 .header("content-type", "application/json")

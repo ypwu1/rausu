@@ -16,7 +16,9 @@ use tracing::{info, warn};
 
 use std::path::PathBuf;
 
-use crate::auth::chatgpt_oauth::{ensure_chatgpt_credentials, ChatGptOAuthTokenManager, ChatGptTokenSource};
+use crate::auth::chatgpt_oauth::{
+    ensure_chatgpt_credentials, ChatGptOAuthTokenManager, ChatGptTokenSource,
+};
 use crate::auth::copilot::{ensure_copilot_credentials, CopilotTokenManager};
 use crate::auth::oauth::{OAuthTokenManager, TokenSource};
 use crate::auth::vertex::VertexTokenManager;

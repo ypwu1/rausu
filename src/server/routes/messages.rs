@@ -66,7 +66,11 @@ pub async fn messages(
     // chatgpt-subscription supports it via protocol bridging (Messages→Responses).
     let supports_messages = matches!(
         provider_name.as_str(),
-        "anthropic" | "claude-subscription" | "vertex-ai" | "github-copilot" | "chatgpt-subscription"
+        "anthropic"
+            | "claude-subscription"
+            | "vertex-ai"
+            | "github-copilot"
+            | "chatgpt-subscription"
     );
     if !supports_messages {
         return (

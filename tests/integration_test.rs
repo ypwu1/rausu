@@ -27,9 +27,7 @@ fn server_app() -> Router {
         }))
     });
 
-    let echo_handler = || {
-        post(|body: String| async move { Json(json!({"echo": body})) })
-    };
+    let echo_handler = || post(|body: String| async move { Json(json!({"echo": body})) });
 
     Router::new()
         .route("/health", get(|| async { Json(json!({"status": "ok"})) }))
