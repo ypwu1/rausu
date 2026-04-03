@@ -13,7 +13,7 @@
 //! | `POST /v1/chat/completions` | ✅ full (streaming + non-streaming) |
 //! | `GET /v1/models` | ✅ lists configured model names |
 //! | `POST /v1/messages` | ✅ Claude: native passthrough; others: protocol-translated |
-//! | `POST /v1/responses` | ❌ Copilot does not implement OpenAI Responses API |
+//! | `POST /v1/responses` | ✅ passthrough to Copilot upstream `/v1/responses` |
 //!
 //! # Model routing
 //!
@@ -618,6 +618,56 @@ impl Provider for GitHubCopilotProvider {
         };
 
         Ok(reqwest::Response::from(http_resp))
+    }
+
+    /// Forward an OpenAI Responses API request to GitHub Copilot.
+    ///
+    /// The request is sent as-is to Copilot's `/v1/responses` endpoint with
+    /// the standard Copilot auth and identity headers. The upstream response
+    /// (streaming or non-streaming) is byte-proxied back without modification.
+    async fn proxy_responses(
+        &self,
+        body: serde_json::Value,
+        _is_stream: bool,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let (api_token, endpoint) = self
+            .token_manager
+            .get_token()
+            .await
+            .map_err(|e| ProviderError::Internal(format!("Copilot auth failed: {e}")))?;
+
+        let url = format!("{}/v1/responses", endpoint);
+        debug!(url = %url, "Sending passthrough Responses API request via github-copilot");
+
+        let client = reqwest::Client::builder()
+            .connect_timeout(std::time::Duration::from_secs(10))
+            .build()
+            .map_err(|e| ProviderError::Internal(format!("Failed to build HTTP client: {e}")))?;
+
+        let response = client
+            .post(&url)
+            .bearer_auth(&api_token)
+            .header("User-Agent", USER_AGENT)
+            .header("Editor-Version", EDITOR_VERSION)
+            .header("Editor-Plugin-Version", EDITOR_PLUGIN_VERSION)
+            .header("Copilot-Integration-Id", COPILOT_INTEGRATION_ID)
+            .header("content-type", "application/json")
+            .json(&body)
+            .send()
+            .await?;
+
+        let status = response.status();
+        if !status.is_success() {
+            let status_code = status.as_u16();
+            let msg = response.text().await.unwrap_or_default();
+            error!(status = status_code, body = %msg, "github-copilot responses proxy error");
+            return Err(ProviderError::ProviderResponse {
+                status: status_code,
+                message: msg,
+            });
+        }
+
+        Ok(response)
     }
 }
 
