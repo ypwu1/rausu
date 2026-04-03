@@ -187,6 +187,8 @@ response = client.chat.completions.create(
 | `/v1/responses/compact` | POST | OpenAI Responses API compact variant — transparent passthrough |
 | `/v1/messages` | POST | Anthropic Messages API — transparent passthrough (Claude Code) |
 
+> **Note:** All `/v1/...` routes are also available without the prefix (e.g. `/responses`, `/chat/completions`, `/models`, `/messages`). This allows clients like Codex CLI that use `{base_url}/responses` instead of `{base_url}/v1/responses` to work without extra configuration.
+
 ## Local Proxy Usage
 
 Rausu can run locally as a single-user proxy for Codex CLI and Claude Code. Local clients pass a placeholder API key; Rausu injects the real upstream credentials automatically.

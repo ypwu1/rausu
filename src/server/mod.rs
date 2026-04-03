@@ -74,11 +74,18 @@ impl Server {
 
         let app = Router::new()
             .route("/health", get(health_check))
+            // Canonical /v1/ routes
             .route("/v1/models", get(list_models))
             .route("/v1/chat/completions", post(chat_completions))
             .route("/v1/responses", post(responses))
             .route("/v1/responses/compact", post(responses_compact))
             .route("/v1/messages", post(messages))
+            // Compatibility routes without /v1/ prefix (e.g. Codex CLI)
+            .route("/models", get(list_models))
+            .route("/chat/completions", post(chat_completions))
+            .route("/responses", post(responses))
+            .route("/responses/compact", post(responses_compact))
+            .route("/messages", post(messages))
             .layer(cors)
             .with_state(state);
 

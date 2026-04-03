@@ -16,20 +16,35 @@ async fn start_test_server() -> String {
 }
 
 fn server_app() -> Router {
+    use axum::routing::post;
     use axum::Json;
     use serde_json::json;
 
+    let models_handler = get(|| async {
+        Json(json!({
+            "object": "list",
+            "data": []
+        }))
+    });
+
+    let echo_handler = || {
+        post(|body: String| async move { Json(json!({"echo": body})) })
+    };
+
     Router::new()
         .route("/health", get(|| async { Json(json!({"status": "ok"})) }))
-        .route(
-            "/v1/models",
-            get(|| async {
-                Json(json!({
-                    "object": "list",
-                    "data": []
-                }))
-            }),
-        )
+        // Canonical /v1/ routes
+        .route("/v1/models", models_handler.clone())
+        .route("/v1/chat/completions", echo_handler())
+        .route("/v1/responses", echo_handler())
+        .route("/v1/responses/compact", echo_handler())
+        .route("/v1/messages", echo_handler())
+        // Compatibility routes without /v1/ prefix
+        .route("/models", models_handler)
+        .route("/chat/completions", echo_handler())
+        .route("/responses", echo_handler())
+        .route("/responses/compact", echo_handler())
+        .route("/messages", echo_handler())
 }
 
 #[tokio::test]
@@ -59,4 +74,73 @@ async fn test_models_endpoint_empty() {
     let body: Value = resp.json().await.unwrap();
     assert_eq!(body["object"], "list");
     assert!(body["data"].is_array());
+}
+
+// --- Non-prefixed compatibility route tests ---
+
+#[tokio::test]
+async fn test_models_without_v1_prefix() {
+    let base_url = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .get(format!("{}/models", base_url))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let body: Value = resp.json().await.unwrap();
+    assert_eq!(body["object"], "list");
+    assert!(body["data"].is_array());
+}
+
+#[tokio::test]
+async fn test_responses_without_v1_prefix() {
+    let base_url = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/responses", base_url))
+        .body("test")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_responses_compact_without_v1_prefix() {
+    let base_url = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/responses/compact", base_url))
+        .body("test")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_chat_completions_without_v1_prefix() {
+    let base_url = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/chat/completions", base_url))
+        .body("test")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+}
+
+#[tokio::test]
+async fn test_messages_without_v1_prefix() {
+    let base_url = start_test_server().await;
+    let client = reqwest::Client::new();
+    let resp = client
+        .post(format!("{}/messages", base_url))
+        .body("test")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
 }

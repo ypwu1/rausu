@@ -271,6 +271,8 @@ models:
 | `GET` | `/v1/models` | 列出已配置的模型 |
 | `GET` | `/health` | 健康检查 |
 
+> **注意：** 所有 `/v1/...` 路由也可以不带前缀使用（例如 `/responses`、`/chat/completions`、`/models`、`/messages`）。这使得像 Codex CLI 这样使用 `{base_url}/responses` 而非 `{base_url}/v1/responses` 的客户端无需额外配置即可工作。
+
 ### 即将推出
 
 | 方法 | 端点 | 阶段 |

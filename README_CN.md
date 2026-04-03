@@ -187,6 +187,8 @@ response = client.chat.completions.create(
 | `/v1/responses/compact` | POST | OpenAI Responses API 紧凑变体 — 透明直传 |
 | `/v1/messages` | POST | Anthropic Messages API — 透明直传（Claude Code） |
 
+> **注意：** 所有 `/v1/...` 路由也可以不带前缀使用（例如 `/responses`、`/chat/completions`、`/models`、`/messages`）。这使得像 Codex CLI 这样使用 `{base_url}/responses` 而非 `{base_url}/v1/responses` 的客户端无需额外配置即可工作。
+
 ## 本地代理使用
 
 Rausu 可作为 Codex CLI 和 Claude Code 的单用户本地代理运行。本地客户端传入占位 API Key，Rausu 自动注入真实的上游凭证。

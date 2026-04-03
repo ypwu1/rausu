@@ -271,6 +271,8 @@ Adding a new provider? Implement the `Provider` trait — see [CONTRIBUTING.md](
 | `GET` | `/v1/models` | List configured models |
 | `GET` | `/health` | Health check |
 
+> **Note:** All `/v1/...` routes are also available without the prefix (e.g. `/responses`, `/chat/completions`, `/models`, `/messages`). This allows clients like Codex CLI that use `{base_url}/responses` instead of `{base_url}/v1/responses` to work without extra configuration.
+
 ### Coming Soon
 
 | Method | Endpoint | Phase |
