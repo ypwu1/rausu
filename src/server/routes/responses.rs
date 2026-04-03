@@ -3,6 +3,12 @@
 //! This is the first-class path for Codex CLI via ChatGPT subscription.
 //! Requests are forwarded as-is to the upstream Responses API with auth
 //! and identity headers injected by the provider.
+//!
+//! Uses raw body extraction instead of Axum's `Json<Value>` extractor to
+//! handle edge cases where Codex CLI falls back from WebSocket to HTTPS
+//! and the body may be empty or compressed.
+
+use std::io::Read as _;
 
 use axum::{
     body::Body,
@@ -11,11 +17,15 @@ use axum::{
     response::{IntoResponse, Response},
     Json,
 };
+use flate2::read::{DeflateDecoder, GzDecoder};
 use serde_json::Value;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::schema::error::ErrorResponse;
 use crate::server::AppState;
+
+/// Maximum request body size (200 MB).
+const MAX_BODY_SIZE: usize = 200 * 1024 * 1024;
 
 /// POST /v1/responses — proxy requests to a Responses-API-capable provider.
 ///
@@ -23,8 +33,14 @@ use crate::server::AppState;
 /// to the configured provider (e.g. `chatgpt-subscription`), injecting the
 /// appropriate authentication headers. The response (streaming or not) is
 /// byte-proxied back to the client without modification.
-pub async fn responses(State(state): State<AppState>, Json(mut body): Json<Value>) -> Response {
-    handle_responses(state, &mut body).await
+pub async fn responses(
+    State(state): State<AppState>,
+    request: axum::extract::Request,
+) -> Response {
+    match extract_json_body(request).await {
+        Ok(mut body) => handle_responses(state, &mut body).await,
+        Err(resp) => resp,
+    }
 }
 
 /// POST /v1/responses/compact — same passthrough as /v1/responses.
@@ -34,9 +50,96 @@ pub async fn responses(State(state): State<AppState>, Json(mut body): Json<Value
 /// responses will receive standard (non-compact) output.
 pub async fn responses_compact(
     State(state): State<AppState>,
-    Json(mut body): Json<Value>,
+    request: axum::extract::Request,
 ) -> Response {
-    handle_responses(state, &mut body).await
+    match extract_json_body(request).await {
+        Ok(mut body) => handle_responses(state, &mut body).await,
+        Err(resp) => resp,
+    }
+}
+
+/// Extract and parse JSON body from the raw request, with decompression support.
+async fn extract_json_body(request: axum::extract::Request) -> Result<Value, Response> {
+    let (parts, req_body) = request.into_parts();
+    let headers = &parts.headers;
+
+    let body_bytes = match axum::body::to_bytes(req_body, MAX_BODY_SIZE).await {
+        Ok(b) => b,
+        Err(e) => {
+            error!(error = %e, "Failed to read request body");
+            return Err((
+                StatusCode::BAD_REQUEST,
+                Json(ErrorResponse::invalid_request(format!(
+                    "Failed to read request body: {e}"
+                ))),
+            )
+                .into_response());
+        }
+    };
+
+    debug!(
+        body_len = body_bytes.len(),
+        content_type = ?headers.get("content-type"),
+        content_encoding = ?headers.get("content-encoding"),
+        "Received /v1/responses request"
+    );
+
+    if body_bytes.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ErrorResponse::invalid_request(
+                "Empty request body. If using Codex CLI, ensure OPENAI_BASE_URL is set correctly.",
+            )),
+        )
+            .into_response());
+    }
+
+    // Try parsing the raw bytes as JSON first.
+    if let Ok(value) = serde_json::from_slice::<Value>(&body_bytes) {
+        return Ok(value);
+    }
+
+    // If JSON parse failed and content-encoding is present, try decompressing.
+    if let Some(encoding) = headers
+        .get("content-encoding")
+        .and_then(|v| v.to_str().ok())
+    {
+        let decompressed = match encoding {
+            "gzip" => {
+                let mut decoder = GzDecoder::new(&body_bytes[..]);
+                let mut buf = Vec::new();
+                decoder.read_to_end(&mut buf).ok().map(|_| buf)
+            }
+            "deflate" => {
+                let mut decoder = DeflateDecoder::new(&body_bytes[..]);
+                let mut buf = Vec::new();
+                decoder.read_to_end(&mut buf).ok().map(|_| buf)
+            }
+            _ => None,
+        };
+
+        if let Some(data) = decompressed {
+            if let Ok(value) = serde_json::from_slice::<Value>(&data) {
+                return Ok(value);
+            }
+        }
+    }
+
+    // All parsing attempts failed — return a diagnostic error.
+    let preview_len = body_bytes.len().min(100);
+    let hex_preview: String = body_bytes[..preview_len]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(" ");
+    Err((
+        StatusCode::BAD_REQUEST,
+        Json(ErrorResponse::invalid_request(format!(
+            "Failed to parse request body as JSON (len={}, first bytes: {hex_preview})",
+            body_bytes.len()
+        ))),
+    )
+        .into_response())
 }
 
 /// Shared handler for both /v1/responses and /v1/responses/compact.
