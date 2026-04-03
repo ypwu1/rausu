@@ -36,20 +36,23 @@ const DEFAULT_CREDENTIALS_RELATIVE: &str = ".config/rausu/chatgpt-auth.json";
 /// Codex CLI credentials file relative to the home directory.
 const CODEX_AUTH_RELATIVE: &str = ".codex/auth.json";
 
-/// Token endpoint for refresh grants.
-const TOKEN_ENDPOINT: &str = "https://auth0.openai.com/oauth/token";
+/// Token endpoint for refresh grants and authorization code exchange.
+const TOKEN_ENDPOINT: &str = "https://auth.openai.com/oauth/token";
 
-/// OAuth client ID used by the ChatGPT pi client.
+/// OAuth client ID used by the ChatGPT / Codex client.
 const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 
 /// JWT claim key for the ChatGPT account ID (nested under the auth namespace).
 const JWT_AUTH_NS: &str = "https://api.openai.com/auth";
 
-/// OpenAI Device Flow: request a device code.
-const DEVICE_CODE_URL: &str = "https://auth0.openai.com/oauth/device/code";
+/// OpenAI Device Flow: request a user code.
+const DEVICE_CODE_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/usercode";
 
-/// Audience for the OpenAI Device Flow token request.
-const DEVICE_AUDIENCE: &str = "https://api.openai.com/v1";
+/// OpenAI Device Flow: poll for authorization code.
+const DEVICE_TOKEN_URL: &str = "https://auth.openai.com/api/accounts/deviceauth/token";
+
+/// OpenAI Device Flow: verification URL shown to the user.
+const DEVICE_VERIFY_URL: &str = "https://auth.openai.com/codex/device";
 
 // ── Token source ──────────────────────────────────────────────────────────────
 
@@ -135,34 +138,25 @@ struct TokenResponse {
     expires_in: Option<i64>,
 }
 
-/// Response from `POST /oauth/device/code`.
+/// Response from `POST /api/accounts/deviceauth/usercode`.
 #[derive(Debug, Deserialize)]
 struct DeviceCodeResponse {
-    device_code: String,
-    #[allow(dead_code)]
+    device_auth_id: String,
     user_code: String,
-    verification_uri_complete: String,
     /// Minimum polling interval in seconds.
     #[serde(default)]
     interval: Option<u64>,
-    /// Seconds until the device code expires.
-    #[allow(dead_code)]
-    expires_in: u64,
 }
 
-/// Response from `POST /oauth/token` during device flow polling.
+/// Response from `POST /api/accounts/deviceauth/token` (when authorized).
 #[derive(Debug, Deserialize)]
-struct DeviceTokenResponse {
-    /// Present on success.
-    access_token: Option<String>,
-    /// Present on success.
+struct DeviceAuthTokenResponse {
+    /// Authorization code to exchange for tokens.
     #[serde(default)]
-    refresh_token: Option<String>,
-    /// Lifetime in seconds (present on success).
+    authorization_code: Option<String>,
+    /// PKCE code verifier.
     #[serde(default)]
-    expires_in: Option<i64>,
-    /// Present on error — `authorization_pending`, `slow_down`, `expired_token`, etc.
-    error: Option<String>,
+    code_verifier: Option<String>,
 }
 
 /// Minimal structure written to `chatgpt-auth.json` after device flow login.
@@ -514,16 +508,17 @@ impl ChatGptOAuthTokenManager {
     // ── Refresh ───────────────────────────────────────────────────────────────
 
     async fn do_refresh(&self, refresh_token: &str) -> Result<ChatGptToken> {
-        let form = [
-            ("grant_type", "refresh_token"),
-            ("refresh_token", refresh_token),
-            ("client_id", CLIENT_ID),
-        ];
+        let body = serde_json::json!({
+            "client_id": CLIENT_ID,
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "scope": "openid profile email",
+        });
 
         let response = self
             .client
             .post(TOKEN_ENDPOINT)
-            .form(&form)
+            .json(&body)
             .send()
             .await
             .context("Failed to send ChatGPT token refresh request")?;
@@ -561,25 +556,28 @@ impl ChatGptOAuthTokenManager {
 
 /// Perform OpenAI Device Code Flow login and return a `ChatGptToken`.
 ///
-/// Prints a verification URL and user code to the terminal, then polls
-/// until the user completes authorization (or the code expires).
+/// Uses OpenAI's non-standard device auth endpoints (not standard OAuth2
+/// device code flow) to avoid Cloudflare JS challenges.
+///
+/// Flow:
+/// 1. Request user code from `/api/accounts/deviceauth/usercode`
+/// 2. User visits verification URL and enters code
+/// 3. Poll `/api/accounts/deviceauth/token` for authorization code
+/// 4. Exchange authorization code for tokens at `/oauth/token`
 pub async fn device_flow_login(client: &Client) -> Result<ChatGptToken> {
-    // Step 1: Request a device code.
+    // Step 1: Request a user code.
+    let body = serde_json::json!({ "client_id": CLIENT_ID });
     let resp = client
         .post(DEVICE_CODE_URL)
-        .header("content-type", "application/x-www-form-urlencoded")
-        .form(&[
-            ("client_id", CLIENT_ID),
-            ("audience", DEVICE_AUDIENCE),
-            ("scope", "openai.public"),
-        ])
+        .json(&body)
         .send()
         .await
         .context("Failed to request OpenAI device code")?;
 
     if !resp.status().is_success() {
+        let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("OpenAI device code request failed: {}", body);
+        anyhow::bail!("OpenAI device code request failed ({}): {}", status, body);
     }
 
     let dc: DeviceCodeResponse = resp
@@ -592,76 +590,115 @@ pub async fn device_flow_login(client: &Client) -> Result<ChatGptToken> {
     println!("\u{2554}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2557}");
     println!("\u{2551}  ChatGPT Login Required                  \u{2551}");
     println!("\u{2560}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2563}");
-    println!("\u{2551}  Open: {}", dc.verification_uri_complete);
+    println!(
+        "\u{2551}  Visit: {}",
+        DEVICE_VERIFY_URL
+    );
+    println!(
+        "\u{2551}  Enter code: {}",
+        dc.user_code
+    );
     println!("\u{255a}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{255d}");
     println!();
 
-    // Step 3: Poll for the access token.
-    let mut interval_secs = dc.interval.unwrap_or(5);
+    // Step 3: Poll for the authorization code.
+    let interval_secs = dc.interval.unwrap_or(5);
     info!("Waiting for authorization...");
 
-    loop {
+    let (authorization_code, code_verifier) = loop {
         tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
 
+        let poll_body = serde_json::json!({
+            "device_auth_id": dc.device_auth_id,
+            "user_code": dc.user_code,
+        });
+
         let resp = client
-            .post(TOKEN_ENDPOINT)
-            .form(&[
-                ("client_id", CLIENT_ID),
-                ("device_code", dc.device_code.as_str()),
-                (
-                    "grant_type",
-                    "urn:ietf:params:oauth:grant-type:device_code",
-                ),
-            ])
+            .post(DEVICE_TOKEN_URL)
+            .json(&poll_body)
             .send()
             .await
-            .context("Failed to poll OpenAI token endpoint")?;
+            .context("Failed to poll OpenAI device auth endpoint")?;
 
-        let dt: DeviceTokenResponse = resp
+        let status = resp.status();
+
+        // 403/404 = still pending
+        if status == reqwest::StatusCode::FORBIDDEN
+            || status == reqwest::StatusCode::NOT_FOUND
+        {
+            debug!("Authorization still pending ({})", status);
+            continue;
+        }
+
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "OpenAI device auth poll returned {}: {}",
+                status,
+                body
+            );
+        }
+
+        let dt: DeviceAuthTokenResponse = resp
             .json()
             .await
-            .context("Failed to parse token poll response")?;
+            .context("Failed to parse device auth token response")?;
 
-        if let Some(access_token) = dt.access_token {
-            let expires_at_ms = dt
-                .expires_in
-                .map(|secs| chrono::Utc::now().timestamp_millis() + secs * 1_000);
-            let account_id = extract_account_id_from_jwt(&access_token);
-
-            return Ok(ChatGptToken {
-                access_token,
-                refresh_token: dt.refresh_token,
-                expires_at_ms,
-                account_id,
-            });
-        }
-
-        match dt.error.as_deref() {
-            Some("authorization_pending") => {
-                // Expected — keep polling.
-            }
-            Some("slow_down") => {
-                interval_secs += 5;
-                debug!(interval_secs, "OpenAI asked us to slow down");
-            }
-            Some("expired_token") => {
-                anyhow::bail!(
-                    "OpenAI device code expired. Please restart Rausu to try again."
-                );
-            }
-            Some("access_denied") => {
-                anyhow::bail!("Authorization was denied by the user.");
-            }
-            Some(other) => {
-                anyhow::bail!("OpenAI device flow error: {}", other);
-            }
-            None => {
-                anyhow::bail!(
-                    "Unexpected response from OpenAI token endpoint (no token, no error)"
-                );
+        match (dt.authorization_code, dt.code_verifier) {
+            (Some(code), Some(verifier)) => break (code, verifier),
+            _ => {
+                // 200 but missing fields — keep polling
+                debug!("Got 200 but missing authorization_code/code_verifier, continuing");
+                continue;
             }
         }
+    };
+
+    // Step 4: Exchange authorization code for tokens.
+    let resp = client
+        .post(TOKEN_ENDPOINT)
+        .form(&[
+            ("grant_type", "authorization_code"),
+            ("code", &authorization_code),
+            (
+                "redirect_uri",
+                "https://auth.openai.com/deviceauth/callback",
+            ),
+            ("client_id", CLIENT_ID),
+            ("code_verifier", &code_verifier),
+        ])
+        .send()
+        .await
+        .context("Failed to exchange authorization code for tokens")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!(
+            "OpenAI token exchange failed ({}): {}",
+            status,
+            body
+        );
     }
+
+    let token_resp: TokenResponse = resp
+        .json()
+        .await
+        .context("Failed to parse token exchange response")?;
+
+    let expires_at_ms = token_resp
+        .expires_in
+        .map(|secs| chrono::Utc::now().timestamp_millis() + secs * 1_000);
+
+    let access_token = token_resp.access_token;
+    let account_id = extract_account_id_from_jwt(&access_token);
+
+    Ok(ChatGptToken {
+        access_token,
+        refresh_token: token_resp.refresh_token,
+        expires_at_ms,
+        account_id,
+    })
 }
 
 /// Ensure that ChatGPT credentials are available, running device flow login
