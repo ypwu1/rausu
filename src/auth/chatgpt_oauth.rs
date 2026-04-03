@@ -191,7 +191,10 @@ impl ChatGptOAuthTokenManager {
     /// Create a new token manager wrapped in an `Arc`.
     pub fn new(token_source: ChatGptTokenSource, credentials_path: Option<PathBuf>) -> Arc<Self> {
         Arc::new(Self {
-            client: Client::new(),
+            client: Client::builder()
+                .user_agent("codex/1.0")
+                .build()
+                .expect("Failed to build HTTP client"),
             token_source,
             credentials_path,
             state: RwLock::new(None),
@@ -415,6 +418,7 @@ pub async fn device_flow_login(client: &Client) -> Result<ChatGptToken> {
     // Step 1: Request a device code.
     let resp = client
         .post(DEVICE_CODE_URL)
+        .header("content-type", "application/x-www-form-urlencoded")
         .form(&[
             ("client_id", CLIENT_ID),
             ("audience", DEVICE_AUDIENCE),
