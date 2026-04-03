@@ -300,6 +300,7 @@ async fn build_providers(
             let token_source = match token_source_str.as_str() {
                 "env" => ChatGptTokenSource::Env,
                 "credentials_file" => ChatGptTokenSource::CredentialsFile,
+                "codex" => ChatGptTokenSource::Codex,
                 "device_flow" => ChatGptTokenSource::DeviceFlow,
                 _ => ChatGptTokenSource::Auto,
             };

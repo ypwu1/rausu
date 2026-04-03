@@ -33,6 +33,9 @@ const CHATGPT_ACCOUNT_ID_ENV: &str = "CHATGPT_ACCOUNT_ID";
 /// Default credentials file relative to the home directory.
 const DEFAULT_CREDENTIALS_RELATIVE: &str = ".config/rausu/chatgpt-auth.json";
 
+/// Codex CLI credentials file relative to the home directory.
+const CODEX_AUTH_RELATIVE: &str = ".codex/auth.json";
+
 /// Token endpoint for refresh grants.
 const TOKEN_ENDPOINT: &str = "https://auth0.openai.com/oauth/token";
 
@@ -57,9 +60,11 @@ pub enum ChatGptTokenSource {
     Env,
     /// Use `~/.config/rausu/chatgpt-auth.json` (or a custom path).
     CredentialsFile,
+    /// Use Codex CLI's `~/.codex/auth.json`.
+    Codex,
     /// Explicitly use OpenAI Device Code Flow login.
     DeviceFlow,
-    /// Auto-detect: try env first, then credentials file, then device flow.
+    /// Auto-detect: try env first, then credentials file, then Codex auth, then device flow.
     Auto,
 }
 
@@ -100,6 +105,22 @@ struct CredentialsFile {
     #[serde(default)]
     expires_at: Option<i64>,
     #[serde(default)]
+    account_id: Option<String>,
+}
+
+/// Codex CLI `~/.codex/auth.json` structure.
+#[derive(Debug, Deserialize)]
+struct CodexCredentialsFile {
+    #[allow(dead_code)]
+    auth_mode: Option<String>,
+    tokens: Option<CodexTokens>,
+}
+
+/// Token block within the Codex credentials file.
+#[derive(Debug, Deserialize)]
+struct CodexTokens {
+    access_token: Option<String>,
+    refresh_token: Option<String>,
     account_id: Option<String>,
 }
 
@@ -251,6 +272,7 @@ impl ChatGptOAuthTokenManager {
         match &self.token_source {
             ChatGptTokenSource::Env => self.load_from_env(),
             ChatGptTokenSource::CredentialsFile => self.load_from_credentials_file(),
+            ChatGptTokenSource::Codex => self.load_from_codex_auth(),
             ChatGptTokenSource::DeviceFlow => {
                 Err(anyhow::anyhow!("Device flow requires async; use load_or_login()"))
             }
@@ -258,7 +280,10 @@ impl ChatGptOAuthTokenManager {
                 if let Ok(token) = self.load_from_env() {
                     return Ok(token);
                 }
-                self.load_from_credentials_file()
+                if let Ok(token) = self.load_from_credentials_file() {
+                    return Ok(token);
+                }
+                self.load_from_codex_auth()
             }
         }
     }
@@ -270,6 +295,31 @@ impl ChatGptOAuthTokenManager {
             ChatGptTokenSource::DeviceFlow => {
                 let token = device_flow_login(&self.client).await?;
                 self.save_credentials(&token)?;
+                Ok(token)
+            }
+            ChatGptTokenSource::Codex => self.load_from_codex_auth_with_refresh().await,
+            ChatGptTokenSource::Auto => {
+                // Try sync sources first.
+                if let Ok(token) = self.load_from_env() {
+                    return Ok(token);
+                }
+                if let Ok(token) = self.load_from_credentials_file() {
+                    return Ok(token);
+                }
+                // Try Codex auth (with async refresh support).
+                if let Ok(token) = self.load_from_codex_auth_with_refresh().await {
+                    return Ok(token);
+                }
+                // Fall back to device flow if TTY is available.
+                if !std::io::stdout().is_terminal() {
+                    anyhow::bail!(
+                        "ChatGPT credentials not found in env, credentials file, or Codex auth"
+                    );
+                }
+                info!("ChatGPT credentials not found, initiating device flow login...");
+                let token = device_flow_login(&self.client).await?;
+                self.save_credentials(&token)?;
+                info!("ChatGPT login successful! Credentials saved.");
                 Ok(token)
             }
             _ => match self.load_token() {
@@ -353,6 +403,105 @@ impl ChatGptOAuthTokenManager {
             expires_at_ms: creds.expires_at,
             account_id,
         })
+    }
+
+    /// Load from Codex CLI's `~/.codex/auth.json`.
+    pub fn load_from_codex_auth(&self) -> Result<ChatGptToken> {
+        let path = dirs::home_dir()
+            .map(|home| home.join(CODEX_AUTH_RELATIVE))
+            .context("Could not determine home directory for Codex auth")?;
+
+        let contents = std::fs::read_to_string(&path).with_context(|| {
+            format!(
+                "Failed to read Codex credentials file: {}",
+                path.display()
+            )
+        })?;
+
+        let codex: CodexCredentialsFile =
+            serde_json::from_str(&contents).context("Failed to parse Codex credentials file")?;
+
+        let tokens = codex
+            .tokens
+            .context("Codex auth.json has no 'tokens' field")?;
+
+        let access_token = tokens
+            .access_token
+            .filter(|s| !s.is_empty())
+            .context("Codex auth.json has no access_token")?;
+
+        let account_id = tokens
+            .account_id
+            .filter(|s| !s.is_empty())
+            .or_else(|| extract_account_id_from_jwt(&access_token));
+
+        info!(
+            "Loaded ChatGPT credentials from Codex CLI (~/.codex/auth.json)"
+        );
+
+        Ok(ChatGptToken {
+            access_token,
+            refresh_token: tokens.refresh_token.filter(|s| !s.is_empty()),
+            expires_at_ms: None, // Codex doesn't store expiry; rely on refresh-on-failure
+            account_id,
+        })
+    }
+
+    /// Load from Codex auth with async refresh support.
+    ///
+    /// If the Codex file has a refresh token but no (or empty) access token,
+    /// performs a token refresh to obtain a fresh access token.
+    async fn load_from_codex_auth_with_refresh(&self) -> Result<ChatGptToken> {
+        let path = dirs::home_dir()
+            .map(|home| home.join(CODEX_AUTH_RELATIVE))
+            .context("Could not determine home directory for Codex auth")?;
+
+        let contents = std::fs::read_to_string(&path).with_context(|| {
+            format!(
+                "Failed to read Codex credentials file: {}",
+                path.display()
+            )
+        })?;
+
+        let codex: CodexCredentialsFile =
+            serde_json::from_str(&contents).context("Failed to parse Codex credentials file")?;
+
+        let tokens = codex
+            .tokens
+            .context("Codex auth.json has no 'tokens' field")?;
+
+        let access_token = tokens.access_token.filter(|s| !s.is_empty());
+        let refresh_token = tokens.refresh_token.filter(|s| !s.is_empty());
+
+        // If we have an access token, use it directly.
+        if let Some(access_token) = access_token {
+            let account_id = tokens
+                .account_id
+                .filter(|s| !s.is_empty())
+                .or_else(|| extract_account_id_from_jwt(&access_token));
+
+            info!(
+                "Loaded ChatGPT credentials from Codex CLI (~/.codex/auth.json)"
+            );
+
+            return Ok(ChatGptToken {
+                access_token,
+                refresh_token,
+                expires_at_ms: None,
+                account_id,
+            });
+        }
+
+        // No access token — try refreshing if we have a refresh token.
+        let refresh_token =
+            refresh_token.context("Codex auth.json has neither access_token nor refresh_token")?;
+
+        info!("Codex auth.json has no access_token; attempting refresh");
+        let token = self.do_refresh(&refresh_token).await?;
+        info!(
+            "Loaded ChatGPT credentials from Codex CLI (~/.codex/auth.json) via token refresh"
+        );
+        Ok(token)
     }
 
     fn credentials_path(&self) -> Option<PathBuf> {
@@ -672,5 +821,64 @@ mod tests {
             Some(PathBuf::from("/nonexistent/chatgpt-auth.json")),
         );
         assert!(manager.load_from_credentials_file().is_err());
+    }
+
+    #[test]
+    fn test_load_from_codex_auth() {
+        let jwt = make_test_jwt();
+        let json = serde_json::json!({
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": null,
+            "tokens": {
+                "id_token": "eyJ_id",
+                "access_token": jwt,
+                "refresh_token": "v1.refresh_abc",
+                "account_id": "codex-account-123"
+            },
+            "last_refresh": "2026-04-03T03:52:32.196331Z"
+        });
+
+        // Write a temporary file and point HOME at its parent so
+        // dirs::home_dir() resolves to our temp dir.
+        let dir = std::env::temp_dir().join("rausu_test_codex_auth");
+        let codex_dir = dir.join(".codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        let path = codex_dir.join("auth.json");
+        std::fs::write(&path, json.to_string()).unwrap();
+
+        // Directly parse the file instead of relying on HOME override.
+        let contents = std::fs::read_to_string(&path).unwrap();
+        let codex: CodexCredentialsFile = serde_json::from_str(&contents).unwrap();
+        let tokens = codex.tokens.unwrap();
+
+        assert_eq!(tokens.access_token.as_deref(), Some(jwt.as_str()));
+        assert_eq!(tokens.refresh_token.as_deref(), Some("v1.refresh_abc"));
+        assert_eq!(tokens.account_id.as_deref(), Some("codex-account-123"));
+
+        std::fs::remove_dir_all(dir).ok();
+    }
+
+    #[test]
+    fn test_codex_auth_missing_tokens() {
+        let json = serde_json::json!({
+            "auth_mode": "chatgpt",
+            "OPENAI_API_KEY": "sk-test"
+        });
+        let codex: CodexCredentialsFile = serde_json::from_str(&json.to_string()).unwrap();
+        assert!(codex.tokens.is_none());
+    }
+
+    #[test]
+    fn test_codex_auth_empty_access_token() {
+        let json = serde_json::json!({
+            "tokens": {
+                "access_token": "",
+                "refresh_token": "v1.refresh"
+            }
+        });
+        let codex: CodexCredentialsFile = serde_json::from_str(&json.to_string()).unwrap();
+        let tokens = codex.tokens.unwrap();
+        // Empty access_token should be filtered out
+        assert!(tokens.access_token.unwrap().is_empty());
     }
 }
