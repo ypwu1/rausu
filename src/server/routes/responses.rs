@@ -104,21 +104,18 @@ async fn extract_json_body(request: axum::extract::Request) -> Result<Value, Res
         .get("content-encoding")
         .and_then(|v| v.to_str().ok())
     {
-        let decompressed = match encoding {
-            "gzip" => {
-                let mut decoder = GzDecoder::new(&body_bytes[..]);
-                let mut buf = Vec::new();
-                decoder.read_to_end(&mut buf).ok().map(|_| buf)
-            }
-            "deflate" => {
-                let mut decoder = DeflateDecoder::new(&body_bytes[..]);
-                let mut buf = Vec::new();
-                decoder.read_to_end(&mut buf).ok().map(|_| buf)
-            }
-            _ => None,
-        };
+        let decompressed = try_decompress(encoding, &body_bytes);
 
         if let Some(data) = decompressed {
+            if let Ok(value) = serde_json::from_slice::<Value>(&data) {
+                return Ok(value);
+            }
+        }
+    }
+
+    // Auto-detect zstd by magic bytes (28 b5 2f fd) when no content-encoding header.
+    if body_bytes.len() >= 4 && body_bytes[..4] == [0x28, 0xb5, 0x2f, 0xfd] {
+        if let Some(data) = try_decompress("zstd", &body_bytes) {
             if let Ok(value) = serde_json::from_slice::<Value>(&data) {
                 return Ok(value);
             }
@@ -140,6 +137,24 @@ async fn extract_json_body(request: axum::extract::Request) -> Result<Value, Res
         ))),
     )
         .into_response())
+}
+
+/// Try to decompress body bytes according to the given encoding.
+fn try_decompress(encoding: &str, data: &[u8]) -> Option<Vec<u8>> {
+    match encoding {
+        "gzip" => {
+            let mut decoder = GzDecoder::new(data);
+            let mut buf = Vec::new();
+            decoder.read_to_end(&mut buf).ok().map(|_| buf)
+        }
+        "deflate" => {
+            let mut decoder = DeflateDecoder::new(data);
+            let mut buf = Vec::new();
+            decoder.read_to_end(&mut buf).ok().map(|_| buf)
+        }
+        "zstd" => zstd::decode_all(data).ok(),
+        _ => None,
+    }
 }
 
 /// Shared handler for both /v1/responses and /v1/responses/compact.
