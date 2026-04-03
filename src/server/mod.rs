@@ -16,7 +16,7 @@ use tracing::{info, warn};
 
 use std::path::PathBuf;
 
-use crate::auth::chatgpt_oauth::{ChatGptOAuthTokenManager, ChatGptTokenSource};
+use crate::auth::chatgpt_oauth::{ensure_chatgpt_credentials, ChatGptOAuthTokenManager, ChatGptTokenSource};
 use crate::auth::copilot::{ensure_copilot_credentials, CopilotTokenManager};
 use crate::auth::oauth::{OAuthTokenManager, TokenSource};
 use crate::auth::vertex::VertexTokenManager;
@@ -300,6 +300,7 @@ async fn build_providers(
             let token_source = match token_source_str.as_str() {
                 "env" => ChatGptTokenSource::Env,
                 "credentials_file" => ChatGptTokenSource::CredentialsFile,
+                "device_flow" => ChatGptTokenSource::DeviceFlow,
                 _ => ChatGptTokenSource::Auto,
             };
             let credentials_path = if credentials_path_str.is_empty() {
@@ -308,6 +309,9 @@ async fn build_providers(
                 Some(PathBuf::from(&credentials_path_str))
             };
             let token_manager = ChatGptOAuthTokenManager::new(token_source, credentials_path);
+            if let Err(e) = ensure_chatgpt_credentials(&token_manager).await {
+                warn!("ChatGPT login failed: {e:#}");
+            }
             providers.push(Box::new(ChatGptSubscriptionProvider::new(
                 token_manager,
                 model_names,

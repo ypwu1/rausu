@@ -1,15 +1,20 @@
 //! ChatGPT OAuth token manager.
 //!
-//! Supports loading tokens from environment variables or a credentials file,
-//! with automatic refresh via the OpenAI OAuth token endpoint.
+//! Supports loading tokens from environment variables, a credentials file,
+//! or automatic OpenAI Device Code Flow login.
+//!
+//! If `Auto` source is used and no env/file credentials exist, and stdout is
+//! a TTY, the manager will automatically initiate an OpenAI Device Flow login
+//! so the user can authorize in a browser.
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use base64::Engine;
 use reqwest::Client;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
@@ -37,6 +42,12 @@ const CLIENT_ID: &str = "app_EMoamEEZ73f0CkXaXp7hrann";
 /// JWT claim key for the ChatGPT account ID (nested under the auth namespace).
 const JWT_AUTH_NS: &str = "https://api.openai.com/auth";
 
+/// OpenAI Device Flow: request a device code.
+const DEVICE_CODE_URL: &str = "https://auth.openai.com/oauth/device/code";
+
+/// Audience for the OpenAI Device Flow token request.
+const DEVICE_AUDIENCE: &str = "https://api.openai.com/v1";
+
 // ── Token source ──────────────────────────────────────────────────────────────
 
 /// Determines where the ChatGPT OAuth token is loaded from.
@@ -46,7 +57,9 @@ pub enum ChatGptTokenSource {
     Env,
     /// Use `~/.config/rausu/chatgpt-auth.json` (or a custom path).
     CredentialsFile,
-    /// Auto-detect: try env first, then credentials file.
+    /// Explicitly use OpenAI Device Code Flow login.
+    DeviceFlow,
+    /// Auto-detect: try env first, then credentials file, then device flow.
     Auto,
 }
 
@@ -99,6 +112,48 @@ struct TokenResponse {
     /// Lifetime in seconds.
     #[serde(default)]
     expires_in: Option<i64>,
+}
+
+/// Response from `POST /oauth/device/code`.
+#[derive(Debug, Deserialize)]
+struct DeviceCodeResponse {
+    device_code: String,
+    #[allow(dead_code)]
+    user_code: String,
+    verification_uri_complete: String,
+    /// Minimum polling interval in seconds.
+    #[serde(default)]
+    interval: Option<u64>,
+    /// Seconds until the device code expires.
+    #[allow(dead_code)]
+    expires_in: u64,
+}
+
+/// Response from `POST /oauth/token` during device flow polling.
+#[derive(Debug, Deserialize)]
+struct DeviceTokenResponse {
+    /// Present on success.
+    access_token: Option<String>,
+    /// Present on success.
+    #[serde(default)]
+    refresh_token: Option<String>,
+    /// Lifetime in seconds (present on success).
+    #[serde(default)]
+    expires_in: Option<i64>,
+    /// Present on error — `authorization_pending`, `slow_down`, `expired_token`, etc.
+    error: Option<String>,
+}
+
+/// Minimal structure written to `chatgpt-auth.json` after device flow login.
+#[derive(Debug, Serialize)]
+struct CredentialsFileWrite {
+    access_token: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    refresh_token: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    expires_at: Option<i64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    account_id: Option<String>,
 }
 
 // ── JWT decode ────────────────────────────────────────────────────────────────
@@ -180,7 +235,7 @@ impl ChatGptOAuthTokenManager {
             }
         }
 
-        let token = self.load_token()?;
+        let token = self.load_or_login().await?;
         let access = token.access_token.clone();
         let account_id = token.account_id.clone();
         *state = Some(token);
@@ -193,6 +248,9 @@ impl ChatGptOAuthTokenManager {
         match &self.token_source {
             ChatGptTokenSource::Env => self.load_from_env(),
             ChatGptTokenSource::CredentialsFile => self.load_from_credentials_file(),
+            ChatGptTokenSource::DeviceFlow => {
+                Err(anyhow::anyhow!("Device flow requires async; use load_or_login()"))
+            }
             ChatGptTokenSource::Auto => {
                 if let Ok(token) = self.load_from_env() {
                     return Ok(token);
@@ -200,6 +258,58 @@ impl ChatGptOAuthTokenManager {
                 self.load_from_credentials_file()
             }
         }
+    }
+
+    /// Load credentials from env/file, or fall back to device flow login if
+    /// stdout is a TTY.
+    pub async fn load_or_login(&self) -> Result<ChatGptToken> {
+        match &self.token_source {
+            ChatGptTokenSource::DeviceFlow => {
+                let token = device_flow_login(&self.client).await?;
+                self.save_credentials(&token)?;
+                Ok(token)
+            }
+            _ => match self.load_token() {
+                Ok(token) => Ok(token),
+                Err(e) => {
+                    if !std::io::stdout().is_terminal() {
+                        return Err(e);
+                    }
+                    info!("ChatGPT credentials not found, initiating device flow login...");
+                    let token = device_flow_login(&self.client).await?;
+                    self.save_credentials(&token)?;
+                    info!("ChatGPT login successful! Credentials saved.");
+                    Ok(token)
+                }
+            },
+        }
+    }
+
+    /// Save credentials to `~/.config/rausu/chatgpt-auth.json`.
+    fn save_credentials(&self, token: &ChatGptToken) -> Result<()> {
+        let path = self
+            .credentials_path()
+            .context("Could not determine chatgpt credentials file path")?;
+
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent)
+                .with_context(|| format!("Failed to create directory: {}", parent.display()))?;
+        }
+
+        let creds = CredentialsFileWrite {
+            access_token: token.access_token.clone(),
+            refresh_token: token.refresh_token.clone(),
+            expires_at: token.expires_at_ms,
+            account_id: token.account_id.clone(),
+        };
+
+        let json =
+            serde_json::to_string_pretty(&creds).context("Failed to serialize credentials")?;
+        std::fs::write(&path, json)
+            .with_context(|| format!("Failed to write credentials file: {}", path.display()))?;
+
+        debug!(path = %path.display(), "Saved ChatGPT credentials");
+        Ok(())
     }
 
     /// Load from environment variables.
@@ -293,6 +403,121 @@ impl ChatGptOAuthTokenManager {
             account_id,
         })
     }
+}
+
+// ── Device Flow ──────────────────────────────────────────────────────────────
+
+/// Perform OpenAI Device Code Flow login and return a `ChatGptToken`.
+///
+/// Prints a verification URL and user code to the terminal, then polls
+/// until the user completes authorization (or the code expires).
+pub async fn device_flow_login(client: &Client) -> Result<ChatGptToken> {
+    // Step 1: Request a device code.
+    let resp = client
+        .post(DEVICE_CODE_URL)
+        .form(&[
+            ("client_id", CLIENT_ID),
+            ("audience", DEVICE_AUDIENCE),
+            ("scope", "openai.public"),
+        ])
+        .send()
+        .await
+        .context("Failed to request OpenAI device code")?;
+
+    if !resp.status().is_success() {
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("OpenAI device code request failed: {}", body);
+    }
+
+    let dc: DeviceCodeResponse = resp
+        .json()
+        .await
+        .context("Failed to parse device code response")?;
+
+    // Step 2: Print instructions.
+    println!();
+    println!("\u{2554}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2557}");
+    println!("\u{2551}  ChatGPT Login Required                  \u{2551}");
+    println!("\u{2560}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2563}");
+    println!("\u{2551}  Open: {}", dc.verification_uri_complete);
+    println!("\u{255a}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{2550}\u{255d}");
+    println!();
+
+    // Step 3: Poll for the access token.
+    let mut interval_secs = dc.interval.unwrap_or(5);
+    info!("Waiting for authorization...");
+
+    loop {
+        tokio::time::sleep(std::time::Duration::from_secs(interval_secs)).await;
+
+        let resp = client
+            .post(TOKEN_ENDPOINT)
+            .form(&[
+                ("client_id", CLIENT_ID),
+                ("device_code", dc.device_code.as_str()),
+                (
+                    "grant_type",
+                    "urn:ietf:params:oauth:grant-type:device_code",
+                ),
+            ])
+            .send()
+            .await
+            .context("Failed to poll OpenAI token endpoint")?;
+
+        let dt: DeviceTokenResponse = resp
+            .json()
+            .await
+            .context("Failed to parse token poll response")?;
+
+        if let Some(access_token) = dt.access_token {
+            let expires_at_ms = dt
+                .expires_in
+                .map(|secs| chrono::Utc::now().timestamp_millis() + secs * 1_000);
+            let account_id = extract_account_id_from_jwt(&access_token);
+
+            return Ok(ChatGptToken {
+                access_token,
+                refresh_token: dt.refresh_token,
+                expires_at_ms,
+                account_id,
+            });
+        }
+
+        match dt.error.as_deref() {
+            Some("authorization_pending") => {
+                // Expected — keep polling.
+            }
+            Some("slow_down") => {
+                interval_secs += 5;
+                debug!(interval_secs, "OpenAI asked us to slow down");
+            }
+            Some("expired_token") => {
+                anyhow::bail!(
+                    "OpenAI device code expired. Please restart Rausu to try again."
+                );
+            }
+            Some("access_denied") => {
+                anyhow::bail!("Authorization was denied by the user.");
+            }
+            Some(other) => {
+                anyhow::bail!("OpenAI device flow error: {}", other);
+            }
+            None => {
+                anyhow::bail!(
+                    "Unexpected response from OpenAI token endpoint (no token, no error)"
+                );
+            }
+        }
+    }
+}
+
+/// Ensure that ChatGPT credentials are available, running device flow login
+/// if necessary. Call this at server startup before binding the listener.
+pub async fn ensure_chatgpt_credentials(
+    token_manager: &ChatGptOAuthTokenManager,
+) -> Result<()> {
+    let _ = token_manager.load_or_login().await?;
+    Ok(())
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────
