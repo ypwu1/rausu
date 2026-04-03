@@ -380,10 +380,15 @@ mod tests {
         let path = mgr.resolve_credentials_path();
         assert!(path.is_some());
         let path = path.unwrap();
-        assert!(path.to_string_lossy().contains("gcloud"));
-        assert!(path
-            .to_string_lossy()
-            .ends_with("application_default_credentials.json"));
+        let components: Vec<_> = path.components().collect();
+        // Check the last two components are gcloud/application_default_credentials.json,
+        // regardless of what HOME is set to (e.g. on GitHub Actions CI).
+        assert!(components.len() >= 2);
+        assert_eq!(
+            components[components.len() - 1].as_os_str(),
+            "application_default_credentials.json"
+        );
+        assert_eq!(components[components.len() - 2].as_os_str(), "gcloud");
     }
 
     #[test]
