@@ -63,9 +63,10 @@ pub async fn messages(
     };
 
     // Only providers that speak the Anthropic Messages API are allowed here.
+    // chatgpt-subscription supports it via protocol bridging (Messages→Responses).
     let supports_messages = matches!(
         provider_name.as_str(),
-        "anthropic" | "claude-subscription" | "vertex-ai" | "github-copilot"
+        "anthropic" | "claude-subscription" | "vertex-ai" | "github-copilot" | "chatgpt-subscription"
     );
     if !supports_messages {
         return (

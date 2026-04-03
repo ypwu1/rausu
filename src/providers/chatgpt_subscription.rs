@@ -543,6 +543,66 @@ fn aggregate_stream_to_response(
     }
 }
 
+/// Aggregate a Responses API SSE stream into a single JSON Value representing
+/// the final response object (extracted from the `response.completed` event).
+///
+/// Falls back to a minimal synthetic response if no completed event is found.
+fn aggregate_responses_sse_to_json(sse_text: &str) -> Value {
+    let mut last_response: Option<Value> = None;
+    let mut current_data: Option<String> = None;
+
+    for line in sse_text.lines() {
+        let line = line.trim();
+        if let Some(stripped) = line.strip_prefix("data: ") {
+            current_data = Some(stripped.to_string());
+        } else if line.is_empty() {
+            if let Some(data) = current_data.take() {
+                if data == "[DONE]" {
+                    continue;
+                }
+                if let Ok(parsed) = serde_json::from_str::<Value>(&data) {
+                    let event_type = parsed
+                        .get("type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    if event_type == "response.completed" || event_type == "response.done" {
+                        if let Some(resp) = parsed.get("response") {
+                            last_response = Some(resp.clone());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Handle data without trailing blank line
+    if let Some(data) = current_data {
+        if data != "[DONE]" {
+            if let Ok(parsed) = serde_json::from_str::<Value>(&data) {
+                let event_type = parsed
+                    .get("type")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+                if event_type == "response.completed" || event_type == "response.done" {
+                    if let Some(resp) = parsed.get("response") {
+                        last_response = Some(resp.clone());
+                    }
+                }
+            }
+        }
+    }
+
+    last_response.unwrap_or_else(|| {
+        serde_json::json!({
+            "id": format!("resp_{}", Uuid::new_v4().simple()),
+            "object": "response",
+            "status": "completed",
+            "output": [],
+            "usage": {"input_tokens": 0, "output_tokens": 0}
+        })
+    })
+}
+
 // ── Provider implementation ───────────────────────────────────────────────────
 
 #[async_trait]
@@ -671,6 +731,96 @@ impl Provider for ChatGptSubscriptionProvider {
         }
 
         Ok(response)
+    }
+
+    /// Forward an Anthropic Messages API request through ChatGPT subscription.
+    ///
+    /// Converts the Messages API request to Responses API format, sends it to
+    /// the ChatGPT `/backend-api/codex/responses` endpoint, and converts the
+    /// response back to Messages API format.
+    async fn proxy_messages(
+        &self,
+        body: serde_json::Value,
+        is_stream: bool,
+        _client_betas: Option<String>,
+    ) -> Result<reqwest::Response, ProviderError> {
+        use bytes::Bytes;
+        use crate::transform;
+
+        let (token, account_id) = self
+            .token_manager
+            .get_token()
+            .await
+            .map_err(|e| ProviderError::Internal(e.to_string()))?;
+
+        // Convert Messages → Responses request
+        let mut responses_body = transform::messages_to_responses_request(&body);
+
+        // ChatGPT Responses API requires stream: true, store: false, and other fields.
+        responses_body["stream"] = serde_json::json!(true);
+        responses_body["store"] = serde_json::json!(false);
+        if responses_body.get("instructions").is_none()
+            || responses_body["instructions"].is_null()
+        {
+            responses_body["instructions"] =
+                serde_json::json!("You are a helpful assistant.");
+        }
+
+        debug!("Sending Messages→Responses bridged request via chatgpt-subscription");
+
+        let mut builder = self
+            .client
+            .post(RESPONSES_API_URL)
+            .header("Authorization", format!("Bearer {}", token))
+            .header("OpenAI-Beta", "responses=experimental")
+            .header("originator", "pi")
+            .header("User-Agent", &self.user_agent)
+            .header("Content-Type", "application/json");
+
+        if let Some(aid) = &account_id {
+            builder = builder.header("chatgpt-account-id", aid);
+        }
+
+        let upstream = builder.json(&responses_body).send().await?;
+
+        let status = upstream.status();
+        if !status.is_success() {
+            let status_code = status.as_u16();
+            let msg = upstream.text().await.unwrap_or_default();
+            error!(status = status_code, body = %msg, "chatgpt-subscription messages→responses bridge error");
+            return Err(ProviderError::ProviderResponse {
+                status: status_code,
+                message: msg,
+            });
+        }
+
+        let http_resp = if is_stream {
+            // Buffer the Responses SSE stream and convert to Messages SSE.
+            let sse_text = upstream.text().await?;
+            let messages_sse = transform::convert_responses_sse_stream(&sse_text)
+                .map_err(ProviderError::Serialisation)?;
+            http::Response::builder()
+                .status(200u16)
+                .header("content-type", "text/event-stream; charset=utf-8")
+                .body(Bytes::from(messages_sse))
+                .map_err(|e| ProviderError::Internal(e.to_string()))?
+        } else {
+            // Buffer the Responses SSE (ChatGPT always streams), aggregate, then
+            // convert to a non-streaming Messages response.
+            let sse_text = upstream.text().await?;
+            // Parse the SSE to extract the final response.completed event
+            let responses_resp = aggregate_responses_sse_to_json(&sse_text);
+            let messages_resp = transform::responses_to_messages_response(&responses_resp);
+            let json = serde_json::to_string(&messages_resp)
+                .map_err(ProviderError::Serialisation)?;
+            http::Response::builder()
+                .status(200u16)
+                .header("content-type", "application/json")
+                .body(Bytes::from(json))
+                .map_err(|e| ProviderError::Internal(e.to_string()))?
+        };
+
+        Ok(reqwest::Response::from(http_resp))
     }
 
     fn models(&self) -> Vec<ModelInfo> {

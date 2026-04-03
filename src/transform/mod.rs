@@ -772,6 +772,706 @@ pub fn convert_messages_sse_stream(sse_text: &str) -> Result<String, serde_json:
     format_responses_sse_events(&all_events)
 }
 
+// ── Phase 2: Request conversion (Messages → Responses) ────────────────────
+
+/// Convert an Anthropic Messages API request body to an OpenAI Responses API request.
+///
+/// Field mapping:
+/// - `messages` → `input` (array of Responses input items)
+/// - `system`   → `instructions`
+/// - `max_tokens` → `max_output_tokens`
+/// - `temperature` → `temperature`
+/// - `stream`   → `stream`
+/// - `tools`    → `tools` (function type)
+/// - `tool_choice` → `tool_choice`
+/// - `model`    → `model`
+pub fn messages_to_responses_request(body: &Value) -> Value {
+    let mut req = json!({});
+
+    // model
+    if let Some(model) = body.get("model") {
+        req["model"] = model.clone();
+    }
+
+    // system → instructions
+    if let Some(system) = body.get("system") {
+        match system {
+            Value::String(s) => {
+                if !s.is_empty() {
+                    req["instructions"] = json!(s);
+                }
+            }
+            Value::Array(parts) => {
+                let text = parts
+                    .iter()
+                    .filter_map(|p| p.get("text").and_then(Value::as_str))
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                if !text.is_empty() {
+                    req["instructions"] = json!(text);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // messages → input
+    let input = convert_messages_to_input(body.get("messages"));
+    if !input.is_empty() {
+        req["input"] = json!(input);
+    }
+
+    // max_tokens → max_output_tokens
+    if let Some(max_tokens) = body.get("max_tokens") {
+        req["max_output_tokens"] = max_tokens.clone();
+    }
+
+    // stream
+    if let Some(stream) = body.get("stream") {
+        req["stream"] = stream.clone();
+    }
+
+    // temperature
+    if let Some(temp) = body.get("temperature") {
+        req["temperature"] = temp.clone();
+    }
+
+    // top_p
+    if let Some(top_p) = body.get("top_p") {
+        req["top_p"] = top_p.clone();
+    }
+
+    // tools (Anthropic format → Responses format)
+    if let Some(Value::Array(tools)) = body.get("tools") {
+        let responses_tools: Vec<Value> = tools
+            .iter()
+            .filter_map(convert_anthropic_tool_to_responses)
+            .collect();
+        if !responses_tools.is_empty() {
+            req["tools"] = json!(responses_tools);
+        }
+    }
+
+    // tool_choice (Anthropic format → Responses format)
+    if let Some(tc) = body.get("tool_choice") {
+        req["tool_choice"] = convert_anthropic_tool_choice(tc);
+    }
+
+    req
+}
+
+/// Convert Anthropic `messages` array to Responses API `input` items.
+fn convert_messages_to_input(messages: Option<&Value>) -> Vec<Value> {
+    let messages = match messages.and_then(|v| v.as_array()) {
+        Some(arr) => arr,
+        None => return vec![],
+    };
+
+    let mut input: Vec<Value> = Vec::new();
+
+    for msg in messages {
+        let role = msg.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+        let content = msg.get("content");
+
+        match role {
+            "user" => convert_user_message(&mut input, content),
+            "assistant" => convert_assistant_message(&mut input, content),
+            _ => {}
+        }
+    }
+
+    input
+}
+
+/// Convert a user message's content to Responses input items.
+fn convert_user_message(input: &mut Vec<Value>, content: Option<&Value>) {
+    let content = match content {
+        Some(c) => c,
+        None => return,
+    };
+
+    // Simple string content
+    if let Some(text) = content.as_str() {
+        input.push(json!({
+            "type": "message",
+            "role": "user",
+            "content": [{"type": "input_text", "text": text}]
+        }));
+        return;
+    }
+
+    // Array content — may contain text or tool_result blocks
+    if let Some(blocks) = content.as_array() {
+        let mut text_parts: Vec<Value> = Vec::new();
+
+        for block in blocks {
+            let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            match block_type {
+                "text" => {
+                    let text = block.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                    text_parts.push(json!({"type": "input_text", "text": text}));
+                }
+                "tool_result" => {
+                    // Flush accumulated text parts as a message first
+                    if !text_parts.is_empty() {
+                        input.push(json!({
+                            "type": "message",
+                            "role": "user",
+                            "content": text_parts.drain(..).collect::<Vec<_>>()
+                        }));
+                    }
+
+                    let call_id = block
+                        .get("tool_use_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let output = extract_tool_result_content(block.get("content"));
+
+                    input.push(json!({
+                        "type": "function_call_output",
+                        "call_id": call_id,
+                        "output": output
+                    }));
+                }
+                _ => {}
+            }
+        }
+
+        // Flush remaining text parts
+        if !text_parts.is_empty() {
+            input.push(json!({
+                "type": "message",
+                "role": "user",
+                "content": text_parts
+            }));
+        }
+    }
+}
+
+/// Extract string content from a tool_result content field.
+fn extract_tool_result_content(content: Option<&Value>) -> String {
+    match content {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .filter_map(|b| {
+                if b.get("type").and_then(|v| v.as_str()) == Some("text") {
+                    b.get("text").and_then(|v| v.as_str()).map(String::from)
+                } else {
+                    None
+                }
+            })
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => String::new(),
+    }
+}
+
+/// Convert an assistant message's content to Responses input items.
+fn convert_assistant_message(input: &mut Vec<Value>, content: Option<&Value>) {
+    let content = match content {
+        Some(c) => c,
+        None => return,
+    };
+
+    // Simple string content
+    if let Some(text) = content.as_str() {
+        input.push(json!({
+            "type": "message",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text}]
+        }));
+        return;
+    }
+
+    // Array content — may contain text, tool_use, or thinking blocks
+    if let Some(blocks) = content.as_array() {
+        let mut text_parts: Vec<Value> = Vec::new();
+
+        for block in blocks {
+            let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            match block_type {
+                "text" => {
+                    let text = block.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                    text_parts.push(json!({"type": "output_text", "text": text}));
+                }
+                "tool_use" => {
+                    // Flush accumulated text parts as a message first
+                    if !text_parts.is_empty() {
+                        input.push(json!({
+                            "type": "message",
+                            "role": "assistant",
+                            "content": text_parts.drain(..).collect::<Vec<_>>()
+                        }));
+                    }
+
+                    let call_id = block.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                    let name = block.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    let input_val = block.get("input").cloned().unwrap_or(json!({}));
+                    let arguments = serde_json::to_string(&input_val).unwrap_or_default();
+
+                    input.push(json!({
+                        "type": "function_call",
+                        "call_id": call_id,
+                        "name": name,
+                        "arguments": arguments
+                    }));
+                }
+                "thinking" => {
+                    // Thinking blocks are not directly representable in Responses input;
+                    // skip them (the model will re-reason on its own).
+                }
+                _ => {}
+            }
+        }
+
+        // Flush remaining text parts
+        if !text_parts.is_empty() {
+            input.push(json!({
+                "type": "message",
+                "role": "assistant",
+                "content": text_parts
+            }));
+        }
+    }
+}
+
+/// Convert an Anthropic tool definition to Responses API format.
+fn convert_anthropic_tool_to_responses(tool: &Value) -> Option<Value> {
+    let name = tool.get("name").and_then(|v| v.as_str())?;
+    let description = tool.get("description").and_then(|v| v.as_str()).unwrap_or("");
+    let parameters = tool
+        .get("input_schema")
+        .cloned()
+        .unwrap_or(json!({"type": "object"}));
+
+    Some(json!({
+        "type": "function",
+        "name": name,
+        "description": description,
+        "parameters": parameters
+    }))
+}
+
+/// Convert Anthropic tool_choice to Responses API format.
+fn convert_anthropic_tool_choice(tc: &Value) -> Value {
+    match tc.get("type").and_then(|v| v.as_str()) {
+        Some("any") => json!("required"),
+        Some("auto") => json!("auto"),
+        Some("tool") => {
+            if let Some(name) = tc.get("name").and_then(|v| v.as_str()) {
+                json!({"type": "function", "name": name})
+            } else {
+                json!("auto")
+            }
+        }
+        _ => {
+            // Could be a plain string already
+            if let Some(s) = tc.as_str() {
+                json!(s)
+            } else {
+                json!("auto")
+            }
+        }
+    }
+}
+
+// ── Phase 2: Response conversion (Responses → Messages) ──────────────────
+
+/// Convert an OpenAI Responses API response to Anthropic Messages API format.
+///
+/// Field mapping:
+/// - `id: "resp_xxx"` → `id: "msg_xxx"`
+/// - `output` array → `content` blocks
+/// - `status` → `stop_reason`
+/// - `usage` → `usage` (without total_tokens)
+pub fn responses_to_messages_response(body: &Value) -> Value {
+    // id: replace resp_ prefix with msg_
+    let id = body
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|id| {
+            if let Some(stripped) = id.strip_prefix("resp_") {
+                format!("msg_{stripped}")
+            } else {
+                format!("msg_{id}")
+            }
+        })
+        .unwrap_or_else(|| format!("msg_{}", Uuid::new_v4().simple()));
+
+    let model = body
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Convert output items → content blocks
+    let mut content: Vec<Value> = Vec::new();
+    let mut has_tool_use = false;
+
+    if let Some(Value::Array(output)) = body.get("output") {
+        for item in output {
+            let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+            match item_type {
+                "message" => {
+                    if let Some(Value::Array(parts)) = item.get("content") {
+                        for part in parts {
+                            let part_type =
+                                part.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                            match part_type {
+                                "output_text" => {
+                                    let text =
+                                        part.get("text").and_then(|v| v.as_str()).unwrap_or("");
+                                    content.push(json!({"type": "text", "text": text}));
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+                "function_call" => {
+                    has_tool_use = true;
+                    let call_id = item
+                        .get("call_id")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("");
+                    let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                    let arguments = item
+                        .get("arguments")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("{}");
+                    let input_val: Value =
+                        serde_json::from_str(arguments).unwrap_or_else(|_| json!({}));
+
+                    content.push(json!({
+                        "type": "tool_use",
+                        "id": call_id,
+                        "name": name,
+                        "input": input_val
+                    }));
+                }
+                "reasoning" => {
+                    let thinking_text = item
+                        .get("summary")
+                        .and_then(|v| v.as_array())
+                        .map(|summaries| {
+                            summaries
+                                .iter()
+                                .filter_map(|s| s.get("text").and_then(|v| v.as_str()))
+                                .collect::<Vec<_>>()
+                                .join("")
+                        })
+                        .unwrap_or_default();
+
+                    if !thinking_text.is_empty() {
+                        content.push(json!({
+                            "type": "thinking",
+                            "thinking": thinking_text
+                        }));
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    // status → stop_reason
+    let status = body
+        .get("status")
+        .and_then(|v| v.as_str())
+        .unwrap_or("completed");
+    let stop_reason = match status {
+        "incomplete" => "max_tokens",
+        _ => {
+            if has_tool_use {
+                "tool_use"
+            } else {
+                "end_turn"
+            }
+        }
+    };
+
+    // usage (without total_tokens)
+    let input_tokens = body
+        .pointer("/usage/input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let output_tokens = body
+        .pointer("/usage/output_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    json!({
+        "id": id,
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": content,
+        "stop_reason": stop_reason,
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens
+        }
+    })
+}
+
+// ── Phase 2: SSE streaming conversion (Responses SSE → Messages SSE) ─────
+
+/// Convert a single Responses SSE event to one or more Messages SSE events.
+///
+/// Returns a vec of (event_name, data) pairs. Some Responses events expand
+/// into multiple Messages events.
+pub fn responses_sse_to_messages_sse(event_name: &str, data: &Value) -> Vec<(String, Value)> {
+    match event_name {
+        "response.created" => convert_response_created(data),
+        "response.output_item.added" => convert_output_item_added(data),
+        "response.output_text.delta" => convert_output_text_delta(data),
+        "response.function_call_arguments.delta" => convert_function_call_arguments_delta(data),
+        "response.content_part.done" | "response.output_item.done" => {
+            convert_content_or_item_done(data)
+        }
+        "response.completed" => convert_response_completed(data),
+        "response.incomplete" => convert_response_incomplete(data),
+        "response.in_progress" => vec![], // no Messages equivalent
+        "response.content_part.added" => vec![], // handled by output_item.added
+        "response.output_text.done" => vec![],
+        "response.function_call_arguments.done" => vec![],
+        "response.reasoning.delta" => vec![], // thinking deltas not mapped
+        _ => {
+            warn!(event = event_name, "Unknown Responses SSE event type");
+            vec![]
+        }
+    }
+}
+
+/// response.created → message_start
+fn convert_response_created(data: &Value) -> Vec<(String, Value)> {
+    let response = data.get("response").unwrap_or(data);
+
+    let id = response
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|id| {
+            if let Some(stripped) = id.strip_prefix("resp_") {
+                format!("msg_{stripped}")
+            } else {
+                format!("msg_{id}")
+            }
+        })
+        .unwrap_or_else(|| format!("msg_{}", Uuid::new_v4().simple()));
+
+    let model = response
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let input_tokens = response
+        .pointer("/usage/input_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    vec![(
+        "message_start".to_string(),
+        json!({
+            "type": "message_start",
+            "message": {
+                "id": id,
+                "type": "message",
+                "role": "assistant",
+                "model": model,
+                "content": [],
+                "stop_reason": null,
+                "stop_sequence": null,
+                "usage": {
+                    "input_tokens": input_tokens,
+                    "output_tokens": 0
+                }
+            }
+        }),
+    )]
+}
+
+/// response.output_item.added → content_block_start
+fn convert_output_item_added(data: &Value) -> Vec<(String, Value)> {
+    let index = data.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0);
+    let item = data.get("item").unwrap_or(data);
+    let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+    match item_type {
+        "message" => {
+            vec![(
+                "content_block_start".to_string(),
+                json!({
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {"type": "text", "text": ""}
+                }),
+            )]
+        }
+        "function_call" => {
+            let tool_id = item
+                .get("call_id")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+
+            vec![(
+                "content_block_start".to_string(),
+                json!({
+                    "type": "content_block_start",
+                    "index": index,
+                    "content_block": {
+                        "type": "tool_use",
+                        "id": tool_id,
+                        "name": name,
+                        "input": {}
+                    }
+                }),
+            )]
+        }
+        _ => vec![],
+    }
+}
+
+/// response.output_text.delta → content_block_delta (text_delta)
+fn convert_output_text_delta(data: &Value) -> Vec<(String, Value)> {
+    let index = data.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0);
+    let text = data.get("delta").and_then(|v| v.as_str()).unwrap_or("");
+
+    vec![(
+        "content_block_delta".to_string(),
+        json!({
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "text_delta", "text": text}
+        }),
+    )]
+}
+
+/// response.function_call_arguments.delta → content_block_delta (input_json_delta)
+fn convert_function_call_arguments_delta(data: &Value) -> Vec<(String, Value)> {
+    let index = data.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0);
+    let partial = data.get("delta").and_then(|v| v.as_str()).unwrap_or("");
+
+    vec![(
+        "content_block_delta".to_string(),
+        json!({
+            "type": "content_block_delta",
+            "index": index,
+            "delta": {"type": "input_json_delta", "partial_json": partial}
+        }),
+    )]
+}
+
+/// response.content_part.done / response.output_item.done → content_block_stop
+fn convert_content_or_item_done(data: &Value) -> Vec<(String, Value)> {
+    let index = data.get("output_index").and_then(|v| v.as_u64()).unwrap_or(0);
+
+    vec![(
+        "content_block_stop".to_string(),
+        json!({
+            "type": "content_block_stop",
+            "index": index
+        }),
+    )]
+}
+
+/// response.completed → message_delta + message_stop
+fn convert_response_completed(data: &Value) -> Vec<(String, Value)> {
+    let output_tokens = data
+        .pointer("/response/usage/output_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    vec![
+        (
+            "message_delta".to_string(),
+            json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "end_turn"},
+                "usage": {"output_tokens": output_tokens}
+            }),
+        ),
+        ("message_stop".to_string(), json!({"type": "message_stop"})),
+    ]
+}
+
+/// response.incomplete → message_delta (max_tokens) + message_stop
+fn convert_response_incomplete(data: &Value) -> Vec<(String, Value)> {
+    let output_tokens = data
+        .pointer("/response/usage/output_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    vec![
+        (
+            "message_delta".to_string(),
+            json!({
+                "type": "message_delta",
+                "delta": {"stop_reason": "max_tokens"},
+                "usage": {"output_tokens": output_tokens}
+            }),
+        ),
+        ("message_stop".to_string(), json!({"type": "message_stop"})),
+    ]
+}
+
+/// Format a sequence of Messages SSE events into an SSE text stream.
+pub fn format_messages_sse_events(events: &[(String, Value)]) -> Result<String, serde_json::Error> {
+    let mut output = String::new();
+    for (event_name, data) in events {
+        output.push_str("event: ");
+        output.push_str(event_name);
+        output.push_str("\ndata: ");
+        output.push_str(&serde_json::to_string(data)?);
+        output.push_str("\n\n");
+    }
+    Ok(output)
+}
+
+/// Convert an entire buffered Responses SSE stream to a Messages SSE stream.
+///
+/// Parses the Responses SSE text, converts each event, and returns the
+/// formatted Messages SSE text.
+pub fn convert_responses_sse_stream(sse_text: &str) -> Result<String, serde_json::Error> {
+    let mut all_events: Vec<(String, Value)> = Vec::new();
+    let mut current_event: Option<String> = None;
+    let mut current_data = String::new();
+
+    for line in sse_text.lines() {
+        if let Some(event) = line.strip_prefix("event: ") {
+            current_event = Some(event.trim().to_string());
+            current_data.clear();
+        } else if let Some(data) = line.strip_prefix("data: ") {
+            current_data.push_str(data);
+        } else if line.trim().is_empty() {
+            if let Some(ref event_name) = current_event {
+                if !current_data.is_empty() {
+                    if let Ok(data) = serde_json::from_str::<Value>(&current_data) {
+                        let messages_events = responses_sse_to_messages_sse(event_name, &data);
+                        all_events.extend(messages_events);
+                    }
+                }
+            }
+            current_event = None;
+            current_data.clear();
+        }
+    }
+
+    // Handle final event if stream doesn't end with empty line
+    if let Some(ref event_name) = current_event {
+        if !current_data.is_empty() {
+            if let Ok(data) = serde_json::from_str::<Value>(&current_data) {
+                let messages_events = responses_sse_to_messages_sse(event_name, &data);
+                all_events.extend(messages_events);
+            }
+        }
+    }
+
+    format_messages_sse_events(&all_events)
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -1288,5 +1988,456 @@ data: {\"type\":\"message_stop\"}\n\
         assert!(result.contains("response.completed"));
         // message_stop should not produce events
         assert!(!result.contains("response.stopped"));
+    }
+
+    // ── Phase 2: Messages → Responses request conversion tests ──────────
+
+    #[test]
+    fn test_p2_simple_text_request() {
+        let body = json!({
+            "model": "gpt-5.4",
+            "messages": [
+                {"role": "user", "content": "What is the capital of France?"}
+            ],
+            "max_tokens": 1024,
+            "stream": false
+        });
+
+        let result = messages_to_responses_request(&body);
+
+        assert_eq!(result["model"], "gpt-5.4");
+        assert_eq!(result["max_output_tokens"], 1024);
+        assert_eq!(result["stream"], false);
+
+        let input = result["input"].as_array().unwrap();
+        assert_eq!(input.len(), 1);
+        assert_eq!(input[0]["type"], "message");
+        assert_eq!(input[0]["role"], "user");
+        assert_eq!(input[0]["content"][0]["type"], "input_text");
+        assert_eq!(input[0]["content"][0]["text"], "What is the capital of France?");
+    }
+
+    #[test]
+    fn test_p2_with_system() {
+        let body = json!({
+            "model": "gpt-5.4",
+            "system": "You are a helpful assistant.",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 1024
+        });
+
+        let result = messages_to_responses_request(&body);
+
+        assert_eq!(result["instructions"], "You are a helpful assistant.");
+    }
+
+    #[test]
+    fn test_p2_system_array() {
+        let body = json!({
+            "model": "gpt-5.4",
+            "system": [
+                {"type": "text", "text": "You are helpful."},
+                {"type": "text", "text": "Be concise."}
+            ],
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 1024
+        });
+
+        let result = messages_to_responses_request(&body);
+        assert_eq!(result["instructions"], "You are helpful.\nBe concise.");
+    }
+
+    #[test]
+    fn test_p2_with_tools() {
+        let body = json!({
+            "model": "gpt-5.4",
+            "messages": [{"role": "user", "content": "What's the weather?"}],
+            "max_tokens": 1024,
+            "tools": [{
+                "name": "get_weather",
+                "description": "Get weather for a city",
+                "input_schema": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"]
+                }
+            }],
+            "tool_choice": {"type": "auto"}
+        });
+
+        let result = messages_to_responses_request(&body);
+
+        let tools = result["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["type"], "function");
+        assert_eq!(tools[0]["name"], "get_weather");
+        assert_eq!(tools[0]["description"], "Get weather for a city");
+        assert!(tools[0].get("parameters").is_some());
+
+        assert_eq!(result["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn test_p2_tool_choice_any_to_required() {
+        let body = json!({
+            "model": "gpt-5.4",
+            "messages": [{"role": "user", "content": "Hello"}],
+            "max_tokens": 1024,
+            "tool_choice": {"type": "any"}
+        });
+
+        let result = messages_to_responses_request(&body);
+        assert_eq!(result["tool_choice"], "required");
+    }
+
+    #[test]
+    fn test_p2_with_tool_use_and_result() {
+        let body = json!({
+            "model": "gpt-5.4",
+            "messages": [
+                {"role": "user", "content": "What's the weather in Tokyo?"},
+                {
+                    "role": "assistant",
+                    "content": [{
+                        "type": "tool_use",
+                        "id": "toolu_123",
+                        "name": "get_weather",
+                        "input": {"city": "Tokyo"}
+                    }]
+                },
+                {
+                    "role": "user",
+                    "content": [{
+                        "type": "tool_result",
+                        "tool_use_id": "toolu_123",
+                        "content": "Sunny, 25°C"
+                    }]
+                }
+            ],
+            "max_tokens": 1024
+        });
+
+        let result = messages_to_responses_request(&body);
+
+        let input = result["input"].as_array().unwrap();
+        assert_eq!(input.len(), 3);
+
+        // First: user message
+        assert_eq!(input[0]["type"], "message");
+        assert_eq!(input[0]["role"], "user");
+
+        // Second: function_call
+        assert_eq!(input[1]["type"], "function_call");
+        assert_eq!(input[1]["call_id"], "toolu_123");
+        assert_eq!(input[1]["name"], "get_weather");
+        assert_eq!(input[1]["arguments"], "{\"city\":\"Tokyo\"}");
+
+        // Third: function_call_output
+        assert_eq!(input[2]["type"], "function_call_output");
+        assert_eq!(input[2]["call_id"], "toolu_123");
+        assert_eq!(input[2]["output"], "Sunny, 25°C");
+    }
+
+    #[test]
+    fn test_p2_assistant_text_message() {
+        let body = json!({
+            "model": "gpt-5.4",
+            "messages": [
+                {"role": "user", "content": "Hello"},
+                {"role": "assistant", "content": [{"type": "text", "text": "Hi there!"}]},
+                {"role": "user", "content": "Follow up"}
+            ],
+            "max_tokens": 1024
+        });
+
+        let result = messages_to_responses_request(&body);
+        let input = result["input"].as_array().unwrap();
+        assert_eq!(input.len(), 3);
+        assert_eq!(input[1]["type"], "message");
+        assert_eq!(input[1]["role"], "assistant");
+        assert_eq!(input[1]["content"][0]["type"], "output_text");
+        assert_eq!(input[1]["content"][0]["text"], "Hi there!");
+    }
+
+    // ── Phase 2: Responses → Messages response conversion tests ─────────
+
+    #[test]
+    fn test_p2_simple_text_response() {
+        let body = json!({
+            "id": "resp_abc123",
+            "object": "response",
+            "model": "gpt-5.4",
+            "status": "completed",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": "Paris is the capital."}]
+            }],
+            "usage": {"input_tokens": 10, "output_tokens": 8}
+        });
+
+        let result = responses_to_messages_response(&body);
+
+        assert_eq!(result["id"], "msg_abc123");
+        assert_eq!(result["type"], "message");
+        assert_eq!(result["role"], "assistant");
+        assert_eq!(result["model"], "gpt-5.4");
+        assert_eq!(result["stop_reason"], "end_turn");
+
+        let content = result["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "text");
+        assert_eq!(content[0]["text"], "Paris is the capital.");
+
+        assert_eq!(result["usage"]["input_tokens"], 10);
+        assert_eq!(result["usage"]["output_tokens"], 8);
+        // No total_tokens in Messages format
+        assert!(result["usage"].get("total_tokens").is_none()
+            || result["usage"]["total_tokens"].is_null());
+    }
+
+    #[test]
+    fn test_p2_function_call_response() {
+        let body = json!({
+            "id": "resp_def456",
+            "object": "response",
+            "model": "gpt-5.4",
+            "status": "completed",
+            "output": [{
+                "type": "function_call",
+                "call_id": "call_789",
+                "name": "get_weather",
+                "arguments": "{\"city\":\"Tokyo\"}"
+            }],
+            "usage": {"input_tokens": 15, "output_tokens": 20}
+        });
+
+        let result = responses_to_messages_response(&body);
+
+        assert_eq!(result["stop_reason"], "tool_use");
+
+        let content = result["content"].as_array().unwrap();
+        assert_eq!(content.len(), 1);
+        assert_eq!(content[0]["type"], "tool_use");
+        assert_eq!(content[0]["id"], "call_789");
+        assert_eq!(content[0]["name"], "get_weather");
+        assert_eq!(content[0]["input"]["city"], "Tokyo");
+    }
+
+    #[test]
+    fn test_p2_reasoning_response() {
+        let body = json!({
+            "id": "resp_reason",
+            "object": "response",
+            "model": "gpt-5.4",
+            "status": "completed",
+            "output": [
+                {
+                    "type": "reasoning",
+                    "summary": [{"type": "summary_text", "text": "Thinking about this..."}]
+                },
+                {
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "The answer is 42."}]
+                }
+            ],
+            "usage": {"input_tokens": 5, "output_tokens": 30}
+        });
+
+        let result = responses_to_messages_response(&body);
+
+        let content = result["content"].as_array().unwrap();
+        assert_eq!(content.len(), 2);
+        assert_eq!(content[0]["type"], "thinking");
+        assert_eq!(content[0]["thinking"], "Thinking about this...");
+        assert_eq!(content[1]["type"], "text");
+        assert_eq!(content[1]["text"], "The answer is 42.");
+    }
+
+    #[test]
+    fn test_p2_incomplete_response() {
+        let body = json!({
+            "id": "resp_inc",
+            "object": "response",
+            "model": "gpt-5.4",
+            "status": "incomplete",
+            "output": [{
+                "type": "message",
+                "content": [{"type": "output_text", "text": "Truncated..."}]
+            }],
+            "usage": {"input_tokens": 10, "output_tokens": 4096}
+        });
+
+        let result = responses_to_messages_response(&body);
+        assert_eq!(result["stop_reason"], "max_tokens");
+    }
+
+    // ── Phase 2: Responses SSE → Messages SSE conversion tests ──────────
+
+    #[test]
+    fn test_p2_sse_response_created() {
+        let data = json!({
+            "type": "response.created",
+            "response": {
+                "id": "resp_sse1",
+                "model": "gpt-5.4",
+                "status": "in_progress",
+                "output": [],
+                "usage": {"input_tokens": 42, "output_tokens": 0}
+            }
+        });
+
+        let events = responses_sse_to_messages_sse("response.created", &data);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "message_start");
+
+        let msg = &events[0].1["message"];
+        assert_eq!(msg["id"], "msg_sse1");
+        assert_eq!(msg["model"], "gpt-5.4");
+        assert_eq!(msg["usage"]["input_tokens"], 42);
+    }
+
+    #[test]
+    fn test_p2_sse_output_text_delta() {
+        let data = json!({
+            "type": "response.output_text.delta",
+            "output_index": 0,
+            "content_index": 0,
+            "delta": "Hello world"
+        });
+
+        let events = responses_sse_to_messages_sse("response.output_text.delta", &data);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "content_block_delta");
+        assert_eq!(events[0].1["delta"]["type"], "text_delta");
+        assert_eq!(events[0].1["delta"]["text"], "Hello world");
+    }
+
+    #[test]
+    fn test_p2_sse_function_call_arguments_delta() {
+        let data = json!({
+            "type": "response.function_call_arguments.delta",
+            "output_index": 1,
+            "delta": "{\"city\":"
+        });
+
+        let events =
+            responses_sse_to_messages_sse("response.function_call_arguments.delta", &data);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "content_block_delta");
+        assert_eq!(events[0].1["delta"]["type"], "input_json_delta");
+        assert_eq!(events[0].1["delta"]["partial_json"], "{\"city\":");
+    }
+
+    #[test]
+    fn test_p2_sse_output_item_added_message() {
+        let data = json!({
+            "type": "response.output_item.added",
+            "output_index": 0,
+            "item": {
+                "type": "message",
+                "role": "assistant",
+                "content": []
+            }
+        });
+
+        let events = responses_sse_to_messages_sse("response.output_item.added", &data);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "content_block_start");
+        assert_eq!(events[0].1["content_block"]["type"], "text");
+    }
+
+    #[test]
+    fn test_p2_sse_output_item_added_function_call() {
+        let data = json!({
+            "type": "response.output_item.added",
+            "output_index": 1,
+            "item": {
+                "type": "function_call",
+                "call_id": "call_abc",
+                "name": "get_weather",
+                "arguments": ""
+            }
+        });
+
+        let events = responses_sse_to_messages_sse("response.output_item.added", &data);
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].0, "content_block_start");
+        assert_eq!(events[0].1["content_block"]["type"], "tool_use");
+        assert_eq!(events[0].1["content_block"]["id"], "call_abc");
+        assert_eq!(events[0].1["content_block"]["name"], "get_weather");
+    }
+
+    #[test]
+    fn test_p2_sse_response_completed() {
+        let data = json!({
+            "type": "response.completed",
+            "response": {
+                "status": "completed",
+                "usage": {"output_tokens": 100}
+            }
+        });
+
+        let events = responses_sse_to_messages_sse("response.completed", &data);
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].0, "message_delta");
+        assert_eq!(events[0].1["delta"]["stop_reason"], "end_turn");
+        assert_eq!(events[0].1["usage"]["output_tokens"], 100);
+        assert_eq!(events[1].0, "message_stop");
+    }
+
+    #[test]
+    fn test_p2_sse_response_incomplete() {
+        let data = json!({
+            "type": "response.incomplete",
+            "response": {
+                "status": "incomplete",
+                "usage": {"output_tokens": 4096}
+            }
+        });
+
+        let events = responses_sse_to_messages_sse("response.incomplete", &data);
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].0, "message_delta");
+        assert_eq!(events[0].1["delta"]["stop_reason"], "max_tokens");
+        assert_eq!(events[1].0, "message_stop");
+    }
+
+    #[test]
+    fn test_p2_convert_full_responses_sse_stream() {
+        let sse_text = "\
+event: response.created\n\
+data: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_test\",\"model\":\"gpt-5.4\",\"status\":\"in_progress\",\"output\":[],\"usage\":{\"input_tokens\":10,\"output_tokens\":0}}}\n\
+\n\
+event: response.output_item.added\n\
+data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"role\":\"assistant\",\"content\":[]}}\n\
+\n\
+event: response.output_text.delta\n\
+data: {\"type\":\"response.output_text.delta\",\"output_index\":0,\"content_index\":0,\"delta\":\"Hello\"}\n\
+\n\
+event: response.output_item.done\n\
+data: {\"type\":\"response.output_item.done\",\"output_index\":0}\n\
+\n\
+event: response.completed\n\
+data: {\"type\":\"response.completed\",\"response\":{\"status\":\"completed\",\"usage\":{\"output_tokens\":5}}}\n\
+\n";
+
+        let result = convert_responses_sse_stream(sse_text).unwrap();
+
+        assert!(result.contains("message_start"));
+        assert!(result.contains("content_block_start"));
+        assert!(result.contains("content_block_delta"));
+        assert!(result.contains("text_delta"));
+        assert!(result.contains("content_block_stop"));
+        assert!(result.contains("message_delta"));
+        assert!(result.contains("message_stop"));
+        assert!(result.contains("end_turn"));
     }
 }
