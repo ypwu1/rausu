@@ -6,6 +6,7 @@ use std::sync::Arc;
 use anyhow::Result;
 use axum::{
     http::Method,
+    middleware,
     routing::{get, post},
     Router,
 };
@@ -20,6 +21,7 @@ use crate::auth::chatgpt_oauth::{
     ensure_chatgpt_credentials, ChatGptOAuthTokenManager, ChatGptTokenSource,
 };
 use crate::auth::copilot::{ensure_copilot_credentials, CopilotTokenManager};
+use crate::auth::middleware::{auth_middleware, AuthState};
 use crate::auth::oauth::{OAuthTokenManager, TokenSource};
 use crate::auth::vertex::VertexTokenManager;
 use crate::config::AppConfig;
@@ -69,6 +71,23 @@ impl Server {
             model_registry: Arc::new(model_registry),
         };
 
+        // Build auth state from config
+        let auth_state = if self.config.auth.mode == "static" {
+            let key_count = self.config.auth.keys.len();
+            info!(
+                auth_mode = "static",
+                key_count = key_count,
+                "API key authentication enabled"
+            );
+            AuthState::from_keys(self.config.auth.keys.iter().map(|k| k.key.clone()))
+        } else {
+            warn!(
+                auth_mode = "disabled",
+                "No authentication configured — proxy is open"
+            );
+            AuthState::disabled()
+        };
+
         let cors = CorsLayer::new()
             .allow_origin(Any)
             .allow_methods([Method::GET, Method::POST, Method::OPTIONS])
@@ -88,6 +107,10 @@ impl Server {
             .route("/responses", post(responses))
             .route("/responses/compact", post(responses_compact))
             .route("/messages", post(messages))
+            .route_layer(middleware::from_fn_with_state(
+                auth_state.clone(),
+                auth_middleware,
+            ))
             .layer(cors)
             .with_state(state);
 
@@ -420,7 +443,7 @@ pub fn collect_model_infos(providers: &[Box<dyn Provider>]) -> Vec<ModelInfo> {
 mod tests {
     use super::*;
     use crate::config::schema::{
-        AppConfig, LoggingConfig, ModelConfig, ProviderDeployment, ServerConfig,
+        AppConfig, AuthConfig, LoggingConfig, ModelConfig, ProviderDeployment, ServerConfig,
     };
 
     fn stub_deployment(provider: &str, model: &str) -> ProviderDeployment {
@@ -440,6 +463,7 @@ mod tests {
         AppConfig {
             server: ServerConfig::default(),
             logging: LoggingConfig::default(),
+            auth: AuthConfig::default(),
             models,
         }
     }

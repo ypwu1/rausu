@@ -282,6 +282,40 @@ models:
 
 ---
 
+## 认证
+
+将 Rausu 暴露到网络时（例如 `host: 0.0.0.0`），可启用 API Key 认证以防止未授权访问。
+
+### 配置
+
+```yaml
+auth:
+  mode: static          # disabled（默认）| static
+  keys:
+    - name: "my-laptop"
+      key: "rausu-sk-abc123"
+    - name: "remote-client"
+      key: "${RAUSU_API_KEY}"    # 支持环境变量插值
+```
+
+如果省略 `auth` 或设为 `mode: disabled`，则不需要认证（适用于 `127.0.0.1` 仅本地使用）。
+
+### 客户端使用
+
+当 `mode: static` 时，客户端必须在请求中以 Bearer Token 方式发送有效的 Key：
+
+```bash
+export OPENAI_API_KEY="rausu-sk-abc123"    # 必须与配置中的某个 key 匹配
+export OPENAI_BASE_URL="http://your-server:4000/v1"
+codex --model gpt-5.3-codex
+```
+
+`/health` 端点始终无需认证即可访问。
+
+**Key 前缀约定：** `rausu-sk-<random>`（推荐但不强制）。
+
+---
+
 ## 伪 Key / 本地认证行为
 
 **Rausu 会忽略本地客户端传入的 API Key。** 本地工具（Codex CLI、Claude Code、curl、SDK 等）通常要求 API Key 字段不为空，但在本地代理模式下，你设置什么值并不重要——Rausu 不会校验它。

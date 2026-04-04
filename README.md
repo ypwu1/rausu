@@ -20,6 +20,7 @@ A high-performance LLM API Gateway written in Rust — a drop-in replacement for
 - **Streaming** — full SSE streaming support
 - **Single binary** — zero runtime dependencies
 - **YAML configuration** — with environment variable interpolation
+- **API key authentication** — optional static-key auth to protect remotely-exposed proxies
 - **Structured logging** — JSON logs with request tracing
 
 ## Quickstart
@@ -182,6 +183,29 @@ models:
 **Supported models:** `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`, `gpt-5.3-instant`, `gpt-5.3-chat-latest`
 
 > **Note:** All four providers (`openai`, `anthropic`, `claude-subscription`, `chatgpt-subscription`) are completely independent and can coexist in the same config, serving different virtual model names.
+
+### Authentication
+
+Rausu supports optional API key authentication to protect a remotely-exposed proxy. Two modes are available:
+
+- **`disabled`** (default) — no authentication; all requests are forwarded.
+- **`static`** — incoming requests must carry a valid `Authorization: Bearer <key>` header matching one of the configured keys.
+
+```yaml
+auth:
+  mode: static
+  keys:
+    - name: "my-laptop"
+      key: "rausu-sk-abc123"
+    - name: "remote-client"
+      key: "${RAUSU_API_KEY}"    # supports env var interpolation
+```
+
+Key values support `${ENV_VAR}` interpolation. The recommended key prefix convention is `rausu-sk-`.
+
+The `/health` endpoint is always exempt from authentication.
+
+If the `auth` section is omitted entirely, authentication defaults to `disabled`.
 
 Environment variable overrides use the `RAUSU__` prefix with `__` as separator:
 

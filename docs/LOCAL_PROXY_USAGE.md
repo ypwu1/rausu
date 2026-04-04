@@ -283,6 +283,40 @@ models:
 
 ---
 
+## Authentication
+
+When exposing Rausu on the network (e.g., `host: 0.0.0.0`), you can enable API key authentication to prevent unauthorized access.
+
+### Config
+
+```yaml
+auth:
+  mode: static          # disabled (default) | static
+  keys:
+    - name: "my-laptop"
+      key: "rausu-sk-abc123"
+    - name: "remote-client"
+      key: "${RAUSU_API_KEY}"    # supports env var interpolation
+```
+
+If `auth` is omitted or `mode: disabled`, no authentication is required (suitable for `127.0.0.1` local-only use).
+
+### Client usage
+
+When `mode: static`, clients must send a valid key as a Bearer token:
+
+```bash
+export OPENAI_API_KEY="rausu-sk-abc123"    # must match a configured key
+export OPENAI_BASE_URL="http://your-server:4000/v1"
+codex --model gpt-5.3-codex
+```
+
+The `/health` endpoint is always accessible without authentication.
+
+**Key prefix convention:** `rausu-sk-<random>` (recommended, not enforced).
+
+---
+
 ## Fake-Key / Local Auth Behavior
 
 **Rausu ignores the API key sent by local clients.** Local tools (Codex CLI, Claude Code, curl, SDKs) typically require an API key field to be non-empty, but in local proxy mode it does not matter what value you set — Rausu does not validate it.

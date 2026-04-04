@@ -13,6 +13,9 @@ pub struct AppConfig {
     /// Logging settings.
     #[serde(default)]
     pub logging: LoggingConfig,
+    /// Authentication settings.
+    #[serde(default)]
+    pub auth: AuthConfig,
     /// Model routing configuration.
     #[serde(default)]
     pub models: Vec<ModelConfig>,
@@ -53,6 +56,39 @@ pub struct LoggingConfig {
     pub level: Option<String>,
     /// Log format: json | pretty (default: json).
     pub format: Option<String>,
+}
+
+/// Authentication configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthConfig {
+    /// Auth mode: "disabled" (default) or "static".
+    #[serde(default = "default_auth_mode")]
+    pub mode: String,
+    /// API keys (only used when mode is "static").
+    #[serde(default)]
+    pub keys: Vec<AuthKey>,
+}
+
+impl Default for AuthConfig {
+    fn default() -> Self {
+        Self {
+            mode: default_auth_mode(),
+            keys: Vec::new(),
+        }
+    }
+}
+
+/// A named API key for static authentication.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthKey {
+    /// Human-readable label for this key.
+    pub name: String,
+    /// The secret key value (supports `${ENV_VAR}` interpolation).
+    pub key: String,
+}
+
+fn default_auth_mode() -> String {
+    "disabled".to_string()
 }
 
 /// Model routing entry.
@@ -125,6 +161,11 @@ impl AppConfig {
             }
         }
 
+        // Interpolate environment variables in auth keys
+        for auth_key in &mut app_config.auth.keys {
+            auth_key.key = interpolate_env(&auth_key.key);
+        }
+
         Ok(app_config)
     }
 }
@@ -178,5 +219,37 @@ mod tests {
         assert_eq!(cfg.server.host, "0.0.0.0");
         assert_eq!(cfg.server.port, 4000);
         assert!(cfg.models.is_empty());
+        assert_eq!(cfg.auth.mode, "disabled");
+        assert!(cfg.auth.keys.is_empty());
+    }
+
+    #[test]
+    fn test_auth_config_defaults() {
+        let cfg = AuthConfig::default();
+        assert_eq!(cfg.mode, "disabled");
+        assert!(cfg.keys.is_empty());
+    }
+
+    #[test]
+    fn test_auth_key_env_interpolation() {
+        std::env::set_var("RAUSU_TEST_AUTH_KEY", "rausu-sk-secret");
+        let mut cfg = AppConfig {
+            server: ServerConfig::default(),
+            logging: LoggingConfig::default(),
+            auth: AuthConfig {
+                mode: "static".to_string(),
+                keys: vec![AuthKey {
+                    name: "test".to_string(),
+                    key: "${RAUSU_TEST_AUTH_KEY}".to_string(),
+                }],
+            },
+            models: vec![],
+        };
+        // Simulate the interpolation that load() performs
+        for auth_key in &mut cfg.auth.keys {
+            auth_key.key = interpolate_env(&auth_key.key);
+        }
+        assert_eq!(cfg.auth.keys[0].key, "rausu-sk-secret");
+        std::env::remove_var("RAUSU_TEST_AUTH_KEY");
     }
 }

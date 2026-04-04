@@ -23,6 +23,21 @@ logging:
   level: info        # trace | debug | info | warn | error
   format: pretty     # json (structured) | pretty (human-readable)
 
+# ── Authentication ────────────────────────────────────────────────────────────
+#
+# Protect your proxy with API key authentication when exposed on the network.
+# mode: disabled (default) — no auth required
+# mode: static   — require a valid Bearer token from the list below
+#
+# Key prefix convention: rausu-sk-<random>
+auth:
+  mode: disabled
+  # keys:
+  #   - name: "my-laptop"
+  #     key: "rausu-sk-change-me"
+  #   - name: "remote-client"
+  #     key: "${RAUSU_API_KEY}"
+
 # ── Models ────────────────────────────────────────────────────────────────────
 #
 # Each entry maps a virtual model name (what clients send) to one or more

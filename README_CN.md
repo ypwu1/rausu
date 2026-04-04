@@ -20,6 +20,7 @@
 - **流式传输** — 完整的 SSE 流式支持
 - **单一二进制** — 零运行时依赖
 - **YAML 配置** — 支持环境变量插值
+- **API Key 认证** — 可选的静态 Key 认证，保护远程暴露的代理
 - **结构化日志** — 带请求追踪的 JSON 日志
 
 ## 快速开始
@@ -180,6 +181,29 @@ models:
 **支持的模型：** `gpt-5.4`、`gpt-5.4-pro`、`gpt-5.3-codex`、`gpt-5.3-codex-spark`、`gpt-5.3-instant`、`gpt-5.3-chat-latest`
 
 > **注意：** 四个 Provider（`openai`、`anthropic`、`claude-subscription`、`chatgpt-subscription`）完全独立，可以在同一配置文件中共存，分别服务不同的虚拟模型名称。
+
+### 认证
+
+Rausu 支持可选的 API Key 认证，用于保护远程暴露的代理。提供两种模式：
+
+- **`disabled`**（默认）— 无认证，所有请求直接转发。
+- **`static`** — 请求必须携带有效的 `Authorization: Bearer <key>` 头，且 Key 在配置列表中。
+
+```yaml
+auth:
+  mode: static
+  keys:
+    - name: "my-laptop"
+      key: "rausu-sk-abc123"
+    - name: "remote-client"
+      key: "${RAUSU_API_KEY}"    # 支持环境变量插值
+```
+
+Key 值支持 `${ENV_VAR}` 插值。推荐的 Key 前缀约定为 `rausu-sk-`。
+
+`/health` 端点始终免于认证。
+
+如果完全省略 `auth` 配置段，认证默认为 `disabled`。
 
 环境变量覆盖使用 `RAUSU__` 前缀，以 `__` 为分隔符：
 
