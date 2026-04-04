@@ -80,6 +80,15 @@ rausu init --path ./config.yaml    # 写入到自定义路径
 rausu init --force                 # 覆盖已有文件
 ```
 
+### `rausu check` — 验证配置并测试连通性
+
+```bash
+rausu check                         # 使用自动发现的配置
+rausu check --config ./config.yaml  # 使用指定配置文件
+```
+
+检查配置文件是否正确解析、所有模型是否具有有效的提供商类型和必填字段、以及各提供商端点是否可达。
+
 ---
 
 ## 配置示例

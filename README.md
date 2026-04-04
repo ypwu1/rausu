@@ -75,6 +75,38 @@ rausu init --path ./my.yaml   # write to a custom path
 rausu init --force            # overwrite an existing file
 ```
 
+### `rausu check`
+
+Validate your configuration and test provider connectivity:
+
+```bash
+rausu check                    # use auto-discovered config
+rausu check --config my.yaml   # use a specific config file
+```
+
+Example output:
+
+```
+📋 Config: ~/.config/rausu/config.yaml
+   Server: 127.0.0.1:4000
+   Auth: static (2 keys)
+
+📦 Models (3):
+   ✓ gpt-5.4 → chatgpt-subscription
+   ✓ claude-opus-4.6 → github-copilot
+   ✓ deepseek-chat → openai (https://api.deepseek.com/v1)
+
+🔌 Connectivity:
+   ✓ chatgpt-subscription: token available (codex auth)
+   ✓ github-copilot: hosts.json found (~/.config/github-copilot/hosts.json)
+   ✓ openai (https://api.deepseek.com/v1): reachable (HTTP 200)
+   ✗ openai (http://localhost:11434/v1): connection refused
+
+✅ 3/4 providers OK
+```
+
+The check runs four steps: config loading, model validation (required fields, valid provider types), provider connectivity (HTTP reachability or credential file existence), and auth verification.
+
 ### Manual setup
 
 Copy `config.example.yaml` and customise:

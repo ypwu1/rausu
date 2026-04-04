@@ -81,6 +81,16 @@ rausu init --path ./config.yaml    # write to a custom path
 rausu init --force                 # overwrite if the file already exists
 ```
 
+### `rausu check` — validate config & test connectivity
+
+```bash
+rausu check                         # use auto-discovered config
+rausu check --config ./config.yaml  # use a specific config file
+```
+
+Checks that the config file parses correctly, all models have valid provider
+types and required fields, and each provider endpoint is reachable.
+
 ---
 
 ## Configuration Examples

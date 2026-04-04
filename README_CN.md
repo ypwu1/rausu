@@ -73,6 +73,38 @@ rausu init --path ./my.yaml   # 写入到自定义路径
 rausu init --force            # 覆盖已有文件
 ```
 
+### `rausu check`
+
+验证配置文件并测试提供商连通性：
+
+```bash
+rausu check                    # 使用自动发现的配置
+rausu check --config my.yaml   # 使用指定配置文件
+```
+
+示例输出：
+
+```
+📋 Config: ~/.config/rausu/config.yaml
+   Server: 127.0.0.1:4000
+   Auth: static (2 keys)
+
+📦 Models (3):
+   ✓ gpt-5.4 → chatgpt-subscription
+   ✓ claude-opus-4.6 → github-copilot
+   ✓ deepseek-chat → openai (https://api.deepseek.com/v1)
+
+🔌 Connectivity:
+   ✓ chatgpt-subscription: token available (codex auth)
+   ✓ github-copilot: hosts.json found (~/.config/github-copilot/hosts.json)
+   ✓ openai (https://api.deepseek.com/v1): reachable (HTTP 200)
+   ✗ openai (http://localhost:11434/v1): connection refused
+
+✅ 3/4 providers OK
+```
+
+检查按四个步骤执行：加载配置、模型验证（必填字段、有效的 Provider 类型）、Provider 连通性（HTTP 可达性或凭证文件是否存在）、以及认证验证。
+
 ### 手动设置
 
 复制示例配置并修改：

@@ -8,6 +8,7 @@ use clap::{Parser, Subcommand};
 use tracing::info;
 
 mod auth;
+mod check;
 mod config;
 mod init;
 mod providers;
@@ -54,6 +55,16 @@ enum Commands {
         #[arg(long)]
         force: bool,
     },
+
+    /// Validate configuration and test provider connectivity.
+    ///
+    /// Loads the config file, checks that all models and provider deployments
+    /// are well-formed, and tests reachability for each unique provider endpoint.
+    Check {
+        /// Path to the YAML configuration file (same resolution as serve mode).
+        #[arg(short, long)]
+        config: Option<String>,
+    },
 }
 
 #[tokio::main]
@@ -62,6 +73,9 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Some(Commands::Init { path, force }) => init::run_init(path.as_deref(), force),
+        Some(Commands::Check { config }) => {
+            check::run_check(config.as_deref().or(cli.config.as_deref())).await
+        }
         None => run_serve(cli.config.as_deref()).await,
     }
 }
