@@ -1650,6 +1650,760 @@ pub fn create_messages_sse_stream_from_responses<E: std::error::Error + Send + '
     }
 }
 
+// ── Phase 3: Request conversion (Responses → Chat Completions) ──────────────
+
+/// Convert an OpenAI Responses API request body to a Chat Completions API request.
+///
+/// Field mapping:
+/// - `input` (string/array) → `messages`
+/// - `instructions` → prepended system message
+/// - `model` → `model`
+/// - `stream` → `stream`
+/// - `max_output_tokens` → `max_tokens`
+/// - `temperature` → `temperature`
+/// - `top_p` → `top_p`
+/// - `tools` → `tools` (Chat Completions format)
+/// - `tool_choice` → `tool_choice`
+pub fn responses_to_chat_completions_request(body: &Value) -> Value {
+    let mut req = json!({});
+
+    // model
+    if let Some(model) = body.get("model") {
+        req["model"] = model.clone();
+    }
+
+    // Build messages from input
+    let mut messages = convert_input_to_cc_messages(body.get("input"));
+
+    // instructions → prepend system message
+    if let Some(instructions) = body.get("instructions").and_then(|v| v.as_str()) {
+        if !instructions.is_empty() {
+            messages.insert(0, json!({"role": "system", "content": instructions}));
+        }
+    }
+
+    if !messages.is_empty() {
+        req["messages"] = json!(messages);
+    }
+
+    // stream
+    if let Some(stream) = body.get("stream") {
+        req["stream"] = stream.clone();
+    }
+
+    // max_output_tokens → max_tokens
+    if let Some(max_tokens) = body.get("max_output_tokens") {
+        req["max_tokens"] = max_tokens.clone();
+    }
+
+    // temperature
+    if let Some(temp) = body.get("temperature") {
+        req["temperature"] = temp.clone();
+    }
+
+    // top_p
+    if let Some(top_p) = body.get("top_p") {
+        req["top_p"] = top_p.clone();
+    }
+
+    // tools → Chat Completions format
+    if let Some(Value::Array(tools)) = body.get("tools") {
+        let cc_tools: Vec<Value> = tools.iter().filter_map(convert_tool_to_cc_format).collect();
+        if !cc_tools.is_empty() {
+            req["tools"] = json!(cc_tools);
+        }
+    }
+
+    // tool_choice: "required"/"auto"/"none" pass through directly
+    if let Some(tc) = body.get("tool_choice") {
+        req["tool_choice"] = convert_tool_choice_to_cc(tc);
+    }
+
+    req
+}
+
+/// Convert Responses API `input` to Chat Completions `messages` array.
+fn convert_input_to_cc_messages(input: Option<&Value>) -> Vec<Value> {
+    let input = match input {
+        Some(v) => v,
+        None => return vec![],
+    };
+
+    // Simple string input → single user message
+    if let Some(text) = input.as_str() {
+        return vec![json!({"role": "user", "content": text})];
+    }
+
+    let items = match input.as_array() {
+        Some(arr) => arr,
+        None => return vec![],
+    };
+
+    let mut messages: Vec<Value> = Vec::new();
+    let mut pending_tool_calls: Vec<Value> = Vec::new();
+
+    for item in items {
+        let item_type = item.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+        match item_type {
+            "message" => {
+                // Flush any pending tool_calls as an assistant message
+                flush_cc_tool_calls(&mut messages, &mut pending_tool_calls);
+
+                let role = item.get("role").and_then(|v| v.as_str()).unwrap_or("user");
+                let content = extract_cc_text_content(item);
+                messages.push(json!({"role": role, "content": content}));
+            }
+
+            "function_call" => {
+                let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+                let name = item.get("name").and_then(|v| v.as_str()).unwrap_or("");
+                let arguments = item
+                    .get("arguments")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("{}");
+
+                pending_tool_calls.push(json!({
+                    "id": call_id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": arguments
+                    }
+                }));
+            }
+
+            "function_call_output" => {
+                // Flush pending tool_calls before adding tool response
+                flush_cc_tool_calls(&mut messages, &mut pending_tool_calls);
+
+                let call_id = item.get("call_id").and_then(|v| v.as_str()).unwrap_or("");
+                let output = item.get("output").and_then(|v| v.as_str()).unwrap_or("");
+
+                messages.push(json!({
+                    "role": "tool",
+                    "tool_call_id": call_id,
+                    "content": output
+                }));
+            }
+
+            // reasoning items are dropped
+            "reasoning" => {}
+
+            _ => {
+                warn!(
+                    item_type = item_type,
+                    "Unknown input item type in Responses→CC conversion"
+                );
+            }
+        }
+    }
+
+    flush_cc_tool_calls(&mut messages, &mut pending_tool_calls);
+
+    messages
+}
+
+/// Flush accumulated tool_calls into a single assistant message.
+fn flush_cc_tool_calls(messages: &mut Vec<Value>, pending: &mut Vec<Value>) {
+    if !pending.is_empty() {
+        messages.push(json!({
+            "role": "assistant",
+            "content": null,
+            "tool_calls": std::mem::take(pending)
+        }));
+    }
+}
+
+/// Extract text content from a Responses message item for CC format.
+fn extract_cc_text_content(item: &Value) -> String {
+    match item.get("content") {
+        Some(Value::String(s)) => s.clone(),
+        Some(Value::Array(blocks)) => blocks
+            .iter()
+            .filter_map(|block| {
+                let block_type = block.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                match block_type {
+                    "input_text" | "output_text" => {
+                        block.get("text").and_then(|v| v.as_str()).map(String::from)
+                    }
+                    _ => None,
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(""),
+        _ => String::new(),
+    }
+}
+
+/// Convert a Responses API tool definition to Chat Completions format.
+fn convert_tool_to_cc_format(tool: &Value) -> Option<Value> {
+    let tool_type = tool.get("type").and_then(|v| v.as_str()).unwrap_or("");
+    if tool_type != "function" {
+        return None;
+    }
+
+    let name = tool.get("name").and_then(|v| v.as_str())?;
+    let description = tool
+        .get("description")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let parameters = tool
+        .get("parameters")
+        .cloned()
+        .unwrap_or(json!({"type": "object"}));
+
+    Some(json!({
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": parameters
+        }
+    }))
+}
+
+/// Convert Responses API tool_choice to Chat Completions format.
+fn convert_tool_choice_to_cc(tc: &Value) -> Value {
+    match tc.as_str() {
+        Some("required") => json!("required"),
+        Some("auto") => json!("auto"),
+        Some("none") => json!("none"),
+        Some(other) => json!(other),
+        None => {
+            // Object form: {"type": "function", "name": "X"}
+            if let Some(name) = tc.get("name").and_then(|v| v.as_str()) {
+                json!({"type": "function", "function": {"name": name}})
+            } else {
+                tc.clone()
+            }
+        }
+    }
+}
+
+// ── Phase 3: Response conversion (Chat Completions → Responses) ─────────────
+
+/// Convert a Chat Completions API response to Responses API format.
+///
+/// Field mapping:
+/// - `id` → `id` (prefixed with "resp_")
+/// - `choices[0].message.content` → output message
+/// - `choices[0].message.tool_calls` → output function_calls
+/// - `choices[0].finish_reason` → status
+/// - `usage` → usage
+pub fn chat_completions_to_responses_response(body: &Value) -> Value {
+    let id = body
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|id| format!("resp_{id}"))
+        .unwrap_or_else(|| format!("resp_{}", Uuid::new_v4().simple()));
+
+    let model = body
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let choice = body
+        .pointer("/choices/0")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
+
+    let message = choice.get("message").cloned().unwrap_or_else(|| json!({}));
+    let finish_reason = choice
+        .get("finish_reason")
+        .and_then(|v| v.as_str())
+        .unwrap_or("stop");
+
+    // Build output items
+    let mut output: Vec<Value> = Vec::new();
+
+    // Text content → message output item
+    if let Some(content) = message.get("content").and_then(|v| v.as_str()) {
+        if !content.is_empty() {
+            output.push(json!({
+                "type": "message",
+                "id": format!("msg_{}", Uuid::new_v4().simple()),
+                "role": "assistant",
+                "status": "completed",
+                "content": [{
+                    "type": "output_text",
+                    "text": content,
+                    "annotations": []
+                }]
+            }));
+        }
+    }
+
+    // Tool calls → function_call output items
+    if let Some(Value::Array(tool_calls)) = message.get("tool_calls") {
+        for tc in tool_calls {
+            let call_id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("");
+            let function = tc.get("function").cloned().unwrap_or_else(|| json!({}));
+            let name = function.get("name").and_then(|v| v.as_str()).unwrap_or("");
+            let arguments = function
+                .get("arguments")
+                .and_then(|v| v.as_str())
+                .unwrap_or("{}");
+
+            output.push(json!({
+                "type": "function_call",
+                "id": format!("fc_{}", Uuid::new_v4().simple()),
+                "call_id": call_id,
+                "name": name,
+                "arguments": arguments,
+                "status": "completed"
+            }));
+        }
+    }
+
+    // finish_reason → status
+    let status = match finish_reason {
+        "length" => "incomplete",
+        _ => "completed", // "stop", "tool_calls" → completed
+    };
+
+    // usage
+    let prompt_tokens = body
+        .pointer("/usage/prompt_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let completion_tokens = body
+        .pointer("/usage/completion_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+
+    json!({
+        "id": id,
+        "object": "response",
+        "model": model,
+        "status": status,
+        "output": output,
+        "usage": {
+            "input_tokens": prompt_tokens,
+            "output_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens
+        }
+    })
+}
+
+// ── Phase 3: SSE streaming conversion (Chat Completions SSE → Responses SSE) ──
+
+/// State tracker for Chat Completions SSE → Responses SSE conversion.
+///
+/// Chat Completions uses delta chunks that need to be accumulated and mapped
+/// to the Responses SSE event model. This state tracks what has been emitted.
+pub struct ChatCompletionsStreamState {
+    /// Whether response.created + response.in_progress have been emitted.
+    created: bool,
+    /// Whether the text content output_item has been added.
+    content_item_added: bool,
+    /// Current output index for the next item.
+    output_index: u64,
+    /// Set of tool_call indices that have already had output_item.added emitted.
+    tool_calls_added: std::collections::HashSet<u64>,
+    /// The output_index assigned to the text message item (if any).
+    text_output_index: Option<u64>,
+}
+
+impl ChatCompletionsStreamState {
+    pub fn new() -> Self {
+        Self {
+            created: false,
+            content_item_added: false,
+            output_index: 0,
+            tool_calls_added: std::collections::HashSet::new(),
+            text_output_index: None,
+        }
+    }
+}
+
+impl Default for ChatCompletionsStreamState {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Convert a single Chat Completions SSE chunk to Responses SSE events.
+///
+/// Chat Completions SSE uses unnamed events with `data: {...}` lines.
+/// This function takes the parsed JSON data and the mutable state, returning
+/// zero or more Responses SSE events.
+pub fn chat_completions_sse_to_responses_sse(
+    data: &Value,
+    state: &mut ChatCompletionsStreamState,
+) -> Vec<(String, Value)> {
+    let mut events: Vec<(String, Value)> = Vec::new();
+
+    let id = data
+        .get("id")
+        .and_then(|v| v.as_str())
+        .map(|id| format!("resp_{id}"))
+        .unwrap_or_default();
+
+    let model = data
+        .get("model")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    // Emit response.created + response.in_progress on the first chunk
+    if !state.created {
+        state.created = true;
+        let response_obj = json!({
+            "id": id,
+            "object": "response",
+            "model": model,
+            "status": "in_progress",
+            "output": [],
+            "usage": {
+                "input_tokens": 0,
+                "output_tokens": 0,
+                "total_tokens": 0
+            }
+        });
+        events.push((
+            "response.created".to_string(),
+            json!({"type": "response.created", "response": response_obj.clone()}),
+        ));
+        events.push((
+            "response.in_progress".to_string(),
+            json!({"type": "response.in_progress", "response": response_obj}),
+        ));
+    }
+
+    let choice = match data.pointer("/choices/0") {
+        Some(c) => c,
+        None => return events,
+    };
+
+    let delta = choice.get("delta").cloned().unwrap_or_else(|| json!({}));
+    let finish_reason = choice.get("finish_reason").and_then(|v| v.as_str());
+
+    // Handle text content delta
+    if let Some(content) = delta.get("content").and_then(|v| v.as_str()) {
+        // Emit output_item.added + content_part.added on first content chunk
+        if !state.content_item_added {
+            state.content_item_added = true;
+            let text_idx = state.output_index;
+            state.text_output_index = Some(text_idx);
+            state.output_index += 1;
+
+            let item_id = format!("item_{}", Uuid::new_v4().simple());
+            events.push((
+                "response.output_item.added".to_string(),
+                json!({
+                    "type": "response.output_item.added",
+                    "output_index": text_idx,
+                    "item": {
+                        "type": "message",
+                        "id": item_id,
+                        "role": "assistant",
+                        "status": "in_progress",
+                        "content": []
+                    }
+                }),
+            ));
+            events.push((
+                "response.content_part.added".to_string(),
+                json!({
+                    "type": "response.content_part.added",
+                    "item_id": item_id,
+                    "output_index": text_idx,
+                    "content_index": 0,
+                    "part": {
+                        "type": "output_text",
+                        "text": "",
+                        "annotations": []
+                    }
+                }),
+            ));
+        }
+
+        if !content.is_empty() {
+            let text_idx = state.text_output_index.unwrap_or(0);
+            events.push((
+                "response.output_text.delta".to_string(),
+                json!({
+                    "type": "response.output_text.delta",
+                    "output_index": text_idx,
+                    "content_index": 0,
+                    "delta": content
+                }),
+            ));
+        }
+    }
+
+    // Handle tool_calls delta
+    if let Some(Value::Array(tool_calls)) = delta.get("tool_calls") {
+        for tc in tool_calls {
+            let tc_index = tc.get("index").and_then(|v| v.as_u64()).unwrap_or(0);
+
+            // Emit output_item.added on first occurrence of this tool_call index
+            if !state.tool_calls_added.contains(&tc_index) {
+                state.tool_calls_added.insert(tc_index);
+
+                let call_id = tc.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                let name = tc
+                    .pointer("/function/name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("");
+
+                let out_idx = state.output_index;
+                state.output_index += 1;
+
+                events.push((
+                    "response.output_item.added".to_string(),
+                    json!({
+                        "type": "response.output_item.added",
+                        "output_index": out_idx,
+                        "item": {
+                            "type": "function_call",
+                            "id": format!("fc_{}", Uuid::new_v4().simple()),
+                            "call_id": call_id,
+                            "name": name,
+                            "arguments": "",
+                            "status": "in_progress"
+                        }
+                    }),
+                ));
+            }
+
+            // Emit arguments delta if present
+            if let Some(args) = tc.pointer("/function/arguments").and_then(|v| v.as_str()) {
+                if !args.is_empty() {
+                    // Compute the output_index for this tool_call:
+                    // it's base offset (text item count) + tc_index
+                    let base = if state.content_item_added { 1 } else { 0 };
+                    let out_idx = base + tc_index;
+
+                    events.push((
+                        "response.function_call_arguments.delta".to_string(),
+                        json!({
+                            "type": "response.function_call_arguments.delta",
+                            "output_index": out_idx,
+                            "delta": args
+                        }),
+                    ));
+                }
+            }
+        }
+    }
+
+    // Handle finish_reason
+    if let Some(reason) = finish_reason {
+        match reason {
+            "stop" => {
+                // Close the text content item
+                if let Some(text_idx) = state.text_output_index {
+                    events.push((
+                        "response.content_part.done".to_string(),
+                        json!({
+                            "type": "response.content_part.done",
+                            "output_index": text_idx,
+                            "content_index": 0
+                        }),
+                    ));
+                    events.push((
+                        "response.output_item.done".to_string(),
+                        json!({
+                            "type": "response.output_item.done",
+                            "output_index": text_idx
+                        }),
+                    ));
+                }
+                let usage = extract_cc_usage(data);
+                events.push((
+                    "response.completed".to_string(),
+                    json!({
+                        "type": "response.completed",
+                        "response": {
+                            "id": id,
+                            "object": "response",
+                            "model": model,
+                            "status": "completed",
+                            "usage": usage
+                        }
+                    }),
+                ));
+            }
+            "tool_calls" => {
+                // Close each tool_call item
+                let base = if state.content_item_added { 1 } else { 0 };
+                for &tc_idx in &state.tool_calls_added {
+                    let out_idx = base + tc_idx;
+                    events.push((
+                        "response.output_item.done".to_string(),
+                        json!({
+                            "type": "response.output_item.done",
+                            "output_index": out_idx
+                        }),
+                    ));
+                }
+                let usage = extract_cc_usage(data);
+                events.push((
+                    "response.completed".to_string(),
+                    json!({
+                        "type": "response.completed",
+                        "response": {
+                            "id": id,
+                            "object": "response",
+                            "model": model,
+                            "status": "completed",
+                            "usage": usage
+                        }
+                    }),
+                ));
+            }
+            "length" => {
+                // Close any open items
+                if let Some(text_idx) = state.text_output_index {
+                    events.push((
+                        "response.content_part.done".to_string(),
+                        json!({
+                            "type": "response.content_part.done",
+                            "output_index": text_idx,
+                            "content_index": 0
+                        }),
+                    ));
+                    events.push((
+                        "response.output_item.done".to_string(),
+                        json!({
+                            "type": "response.output_item.done",
+                            "output_index": text_idx
+                        }),
+                    ));
+                }
+                let usage = extract_cc_usage(data);
+                events.push((
+                    "response.incomplete".to_string(),
+                    json!({
+                        "type": "response.incomplete",
+                        "response": {
+                            "id": id,
+                            "object": "response",
+                            "model": model,
+                            "status": "incomplete",
+                            "usage": usage
+                        }
+                    }),
+                ));
+            }
+            _ => {}
+        }
+    }
+
+    events
+}
+
+/// Extract usage from a Chat Completions chunk (if present).
+fn extract_cc_usage(data: &Value) -> Value {
+    let prompt_tokens = data
+        .pointer("/usage/prompt_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    let completion_tokens = data
+        .pointer("/usage/completion_tokens")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(0);
+    json!({
+        "input_tokens": prompt_tokens,
+        "output_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens
+    })
+}
+
+// ── Phase 3: Streaming SSE adapter ──────────────────────────────────────────
+
+/// Parse Chat Completions SSE data lines from a buffer.
+///
+/// Chat Completions SSE uses only `data:` lines (no `event:` lines), delimited
+/// by `\n\n`. Returns parsed JSON values, skipping `[DONE]`.
+fn drain_cc_sse_events(buffer: &mut String) -> Vec<Value> {
+    let mut events = Vec::new();
+
+    while let Some(pos) = buffer.find("\n\n") {
+        let block = buffer[..pos].to_string();
+        *buffer = buffer[pos + 2..].to_string();
+
+        if block.trim().is_empty() {
+            continue;
+        }
+
+        for line in block.lines() {
+            let data = if let Some(d) = line.strip_prefix("data: ") {
+                d
+            } else if let Some(d) = line.strip_prefix("data:") {
+                d.trim_start()
+            } else {
+                continue;
+            };
+
+            if data == "[DONE]" {
+                continue;
+            }
+
+            if let Ok(value) = serde_json::from_str::<Value>(data) {
+                events.push(value);
+            }
+        }
+    }
+
+    events
+}
+
+/// Create a true-streaming adapter: upstream Chat Completions SSE → downstream Responses SSE.
+///
+/// Reads upstream Chat Completions SSE chunks, converts each via
+/// [`chat_completions_sse_to_responses_sse`], and yields Responses SSE events immediately.
+pub fn create_responses_sse_stream_from_chat_completions<E: std::error::Error + Send + 'static>(
+    stream: impl Stream<Item = Result<Bytes, E>> + Send + 'static,
+) -> impl Stream<Item = Result<Bytes, std::io::Error>> + Send {
+    async_stream::stream! {
+        let mut buffer = String::new();
+        let mut state = ChatCompletionsStreamState::new();
+        tokio::pin!(stream);
+
+        while let Some(chunk) = stream.next().await {
+            match chunk {
+                Ok(bytes) => {
+                    let text = String::from_utf8_lossy(&bytes);
+                    buffer.push_str(&text);
+
+                    for data in drain_cc_sse_events(&mut buffer) {
+                        let converted = chat_completions_sse_to_responses_sse(&data, &mut state);
+                        for (out_event, out_data) in &converted {
+                            yield Ok(format_sse_event(out_event, out_data));
+                        }
+                    }
+                }
+                Err(e) => {
+                    let error_event = json!({
+                        "type": "error",
+                        "error": {
+                            "type": "stream_error",
+                            "message": format!("Upstream stream error: {e}")
+                        }
+                    });
+                    yield Ok(format_sse_event("error", &error_event));
+                    break;
+                }
+            }
+        }
+
+        // Flush remaining buffer.
+        if !buffer.trim().is_empty() {
+            buffer.push_str("\n\n");
+            for data in drain_cc_sse_events(&mut buffer) {
+                let converted = chat_completions_sse_to_responses_sse(&data, &mut state);
+                for (out_event, out_data) in &converted {
+                    yield Ok(format_sse_event(out_event, out_data));
+                }
+            }
+        }
+    }
+}
+
 // ── Tests ────────────────────────────────────────────────────────────────────
 
 #[cfg(test)]
@@ -2824,5 +3578,599 @@ data: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_test\",\"obje
         }
 
         assert!(collected.contains("response.created"));
+    }
+
+    // ── Phase 3: Responses → Chat Completions request tests ─────────────
+
+    #[test]
+    fn test_p3_simple_text_request() {
+        let body = json!({
+            "model": "deepseek-chat",
+            "input": "What is the capital of France?",
+            "max_output_tokens": 1024,
+            "stream": false
+        });
+
+        let result = responses_to_chat_completions_request(&body);
+
+        assert_eq!(result["model"], "deepseek-chat");
+        assert_eq!(result["max_tokens"], 1024);
+        assert_eq!(result["stream"], false);
+
+        let messages = result["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 1);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "What is the capital of France?");
+    }
+
+    #[test]
+    fn test_p3_with_instructions() {
+        let body = json!({
+            "model": "deepseek-chat",
+            "input": "Hello",
+            "instructions": "You are a helpful assistant."
+        });
+
+        let result = responses_to_chat_completions_request(&body);
+
+        let messages = result["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 2);
+        assert_eq!(messages[0]["role"], "system");
+        assert_eq!(messages[0]["content"], "You are a helpful assistant.");
+        assert_eq!(messages[1]["role"], "user");
+        assert_eq!(messages[1]["content"], "Hello");
+    }
+
+    #[test]
+    fn test_p3_with_tools() {
+        let body = json!({
+            "model": "deepseek-chat",
+            "input": "What's the weather?",
+            "tools": [{
+                "type": "function",
+                "name": "get_weather",
+                "description": "Get weather for a city",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"city": {"type": "string"}},
+                    "required": ["city"]
+                }
+            }],
+            "tool_choice": "auto"
+        });
+
+        let result = responses_to_chat_completions_request(&body);
+
+        let tools = result["tools"].as_array().unwrap();
+        assert_eq!(tools.len(), 1);
+        assert_eq!(tools[0]["type"], "function");
+        assert_eq!(tools[0]["function"]["name"], "get_weather");
+        assert_eq!(
+            tools[0]["function"]["description"],
+            "Get weather for a city"
+        );
+        assert!(tools[0]["function"].get("parameters").is_some());
+
+        assert_eq!(result["tool_choice"], "auto");
+    }
+
+    #[test]
+    fn test_p3_with_function_call_and_output() {
+        let body = json!({
+            "model": "deepseek-chat",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": "What's the weather in Tokyo?"
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_123",
+                    "name": "get_weather",
+                    "arguments": "{\"city\":\"Tokyo\"}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_123",
+                    "output": "Sunny, 25°C"
+                }
+            ]
+        });
+
+        let result = responses_to_chat_completions_request(&body);
+
+        let messages = result["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3);
+
+        // User message
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "What's the weather in Tokyo?");
+
+        // Assistant with tool_calls
+        assert_eq!(messages[1]["role"], "assistant");
+        let tool_calls = messages[1]["tool_calls"].as_array().unwrap();
+        assert_eq!(tool_calls.len(), 1);
+        assert_eq!(tool_calls[0]["id"], "call_123");
+        assert_eq!(tool_calls[0]["type"], "function");
+        assert_eq!(tool_calls[0]["function"]["name"], "get_weather");
+        assert_eq!(
+            tool_calls[0]["function"]["arguments"],
+            "{\"city\":\"Tokyo\"}"
+        );
+
+        // Tool response
+        assert_eq!(messages[2]["role"], "tool");
+        assert_eq!(messages[2]["tool_call_id"], "call_123");
+        assert_eq!(messages[2]["content"], "Sunny, 25°C");
+    }
+
+    #[test]
+    fn test_p3_consecutive_function_calls_grouped() {
+        let body = json!({
+            "model": "deepseek-chat",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": "Compare weather in Tokyo and London"
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_1",
+                    "name": "get_weather",
+                    "arguments": "{\"city\":\"Tokyo\"}"
+                },
+                {
+                    "type": "function_call",
+                    "call_id": "call_2",
+                    "name": "get_weather",
+                    "arguments": "{\"city\":\"London\"}"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_1",
+                    "output": "Sunny, 25°C"
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": "call_2",
+                    "output": "Rainy, 12°C"
+                }
+            ]
+        });
+
+        let result = responses_to_chat_completions_request(&body);
+
+        let messages = result["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 4);
+
+        // User message
+        assert_eq!(messages[0]["role"], "user");
+
+        // Single assistant message with both tool_calls grouped together
+        assert_eq!(messages[1]["role"], "assistant");
+        let tool_calls = messages[1]["tool_calls"].as_array().unwrap();
+        assert_eq!(tool_calls.len(), 2);
+        assert_eq!(tool_calls[0]["id"], "call_1");
+        assert_eq!(tool_calls[1]["id"], "call_2");
+
+        // Two tool responses
+        assert_eq!(messages[2]["role"], "tool");
+        assert_eq!(messages[2]["tool_call_id"], "call_1");
+        assert_eq!(messages[3]["role"], "tool");
+        assert_eq!(messages[3]["tool_call_id"], "call_2");
+    }
+
+    #[test]
+    fn test_p3_array_input_with_content_blocks() {
+        let body = json!({
+            "model": "deepseek-chat",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "Hello there"}]
+                },
+                {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "Hi!"}]
+                },
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": "Follow-up"
+                }
+            ]
+        });
+
+        let result = responses_to_chat_completions_request(&body);
+        let messages = result["messages"].as_array().unwrap();
+        assert_eq!(messages.len(), 3);
+        assert_eq!(messages[0]["role"], "user");
+        assert_eq!(messages[0]["content"], "Hello there");
+        assert_eq!(messages[1]["role"], "assistant");
+        assert_eq!(messages[1]["content"], "Hi!");
+        assert_eq!(messages[2]["role"], "user");
+        assert_eq!(messages[2]["content"], "Follow-up");
+    }
+
+    #[test]
+    fn test_p3_tool_choice_required() {
+        let body = json!({
+            "model": "deepseek-chat",
+            "input": "Hello",
+            "tool_choice": "required"
+        });
+
+        let result = responses_to_chat_completions_request(&body);
+        assert_eq!(result["tool_choice"], "required");
+    }
+
+    #[test]
+    fn test_p3_tool_choice_none() {
+        let body = json!({
+            "model": "deepseek-chat",
+            "input": "Hello",
+            "tool_choice": "none"
+        });
+
+        let result = responses_to_chat_completions_request(&body);
+        assert_eq!(result["tool_choice"], "none");
+    }
+
+    // ── Phase 3: Chat Completions → Responses response tests ────────────
+
+    #[test]
+    fn test_p3_simple_text_response() {
+        let body = json!({
+            "id": "chatcmpl-abc123",
+            "object": "chat.completion",
+            "model": "deepseek-chat",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "The capital of France is Paris."
+                },
+                "finish_reason": "stop"
+            }],
+            "usage": {
+                "prompt_tokens": 10,
+                "completion_tokens": 20,
+                "total_tokens": 30
+            }
+        });
+
+        let result = chat_completions_to_responses_response(&body);
+
+        assert_eq!(result["id"], "resp_chatcmpl-abc123");
+        assert_eq!(result["object"], "response");
+        assert_eq!(result["model"], "deepseek-chat");
+        assert_eq!(result["status"], "completed");
+
+        let output = result["output"].as_array().unwrap();
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0]["type"], "message");
+        assert_eq!(output[0]["content"][0]["type"], "output_text");
+        assert_eq!(
+            output[0]["content"][0]["text"],
+            "The capital of France is Paris."
+        );
+
+        assert_eq!(result["usage"]["input_tokens"], 10);
+        assert_eq!(result["usage"]["output_tokens"], 20);
+        assert_eq!(result["usage"]["total_tokens"], 30);
+    }
+
+    #[test]
+    fn test_p3_tool_calls_response() {
+        let body = json!({
+            "id": "chatcmpl-def456",
+            "model": "deepseek-chat",
+            "choices": [{
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "id": "call_123",
+                        "type": "function",
+                        "function": {
+                            "name": "get_weather",
+                            "arguments": "{\"city\":\"Tokyo\"}"
+                        }
+                    }]
+                },
+                "finish_reason": "tool_calls"
+            }],
+            "usage": {"prompt_tokens": 15, "completion_tokens": 30, "total_tokens": 45}
+        });
+
+        let result = chat_completions_to_responses_response(&body);
+
+        assert_eq!(result["status"], "completed");
+
+        let output = result["output"].as_array().unwrap();
+        assert_eq!(output.len(), 1);
+        assert_eq!(output[0]["type"], "function_call");
+        assert_eq!(output[0]["call_id"], "call_123");
+        assert_eq!(output[0]["name"], "get_weather");
+        assert_eq!(output[0]["arguments"], "{\"city\":\"Tokyo\"}");
+    }
+
+    #[test]
+    fn test_p3_length_finish_reason() {
+        let body = json!({
+            "id": "chatcmpl-ghi789",
+            "model": "deepseek-chat",
+            "choices": [{
+                "index": 0,
+                "message": {"role": "assistant", "content": "Partial output..."},
+                "finish_reason": "length"
+            }],
+            "usage": {"prompt_tokens": 10, "completion_tokens": 100, "total_tokens": 110}
+        });
+
+        let result = chat_completions_to_responses_response(&body);
+        assert_eq!(result["status"], "incomplete");
+    }
+
+    // ── Phase 3: Chat Completions SSE → Responses SSE tests ─────────────
+
+    #[test]
+    fn test_p3_sse_first_chunk_emits_created() {
+        let mut state = ChatCompletionsStreamState::new();
+
+        let chunk = json!({
+            "id": "chatcmpl-123",
+            "model": "deepseek-chat",
+            "choices": [{
+                "index": 0,
+                "delta": {"role": "assistant", "content": ""},
+                "finish_reason": null
+            }]
+        });
+
+        let events = chat_completions_sse_to_responses_sse(&chunk, &mut state);
+
+        // Should emit response.created, response.in_progress, output_item.added, content_part.added
+        let event_types: Vec<&str> = events.iter().map(|(e, _)| e.as_str()).collect();
+        assert!(event_types.contains(&"response.created"));
+        assert!(event_types.contains(&"response.in_progress"));
+        assert!(event_types.contains(&"response.output_item.added"));
+        assert!(event_types.contains(&"response.content_part.added"));
+        assert!(state.created);
+    }
+
+    #[test]
+    fn test_p3_sse_text_delta() {
+        let mut state = ChatCompletionsStreamState::new();
+
+        // First chunk to initialize
+        let first = json!({
+            "id": "chatcmpl-123",
+            "model": "deepseek-chat",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": ""}, "finish_reason": null}]
+        });
+        chat_completions_sse_to_responses_sse(&first, &mut state);
+
+        // Content delta
+        let chunk = json!({
+            "id": "chatcmpl-123",
+            "model": "deepseek-chat",
+            "choices": [{"index": 0, "delta": {"content": "Hello"}, "finish_reason": null}]
+        });
+        let events = chat_completions_sse_to_responses_sse(&chunk, &mut state);
+
+        let has_text_delta = events
+            .iter()
+            .any(|(e, _)| e == "response.output_text.delta");
+        assert!(has_text_delta);
+
+        let delta_event = events
+            .iter()
+            .find(|(e, _)| e == "response.output_text.delta")
+            .unwrap();
+        assert_eq!(delta_event.1["delta"], "Hello");
+    }
+
+    #[test]
+    fn test_p3_sse_tool_calls() {
+        let mut state = ChatCompletionsStreamState::new();
+
+        // First chunk with tool_calls
+        let chunk1 = json!({
+            "id": "chatcmpl-123",
+            "model": "deepseek-chat",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "content": null,
+                    "tool_calls": [{
+                        "index": 0,
+                        "id": "call_abc",
+                        "type": "function",
+                        "function": {"name": "get_weather", "arguments": ""}
+                    }]
+                },
+                "finish_reason": null
+            }]
+        });
+        let events1 = chat_completions_sse_to_responses_sse(&chunk1, &mut state);
+
+        let has_item_added = events1
+            .iter()
+            .any(|(e, _)| e == "response.output_item.added");
+        assert!(has_item_added);
+
+        // Check that the function_call item was added
+        let added_event = events1
+            .iter()
+            .find(|(e, d)| {
+                e == "response.output_item.added" && d["item"]["type"] == "function_call"
+            })
+            .unwrap();
+        assert_eq!(added_event.1["item"]["call_id"], "call_abc");
+        assert_eq!(added_event.1["item"]["name"], "get_weather");
+
+        // Arguments delta
+        let chunk2 = json!({
+            "id": "chatcmpl-123",
+            "model": "deepseek-chat",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "tool_calls": [{
+                        "index": 0,
+                        "function": {"arguments": "{\"city\":"}
+                    }]
+                },
+                "finish_reason": null
+            }]
+        });
+        let events2 = chat_completions_sse_to_responses_sse(&chunk2, &mut state);
+
+        let has_args_delta = events2
+            .iter()
+            .any(|(e, _)| e == "response.function_call_arguments.delta");
+        assert!(has_args_delta);
+    }
+
+    #[test]
+    fn test_p3_sse_finish_stop() {
+        let mut state = ChatCompletionsStreamState::new();
+
+        // Initialize with content
+        let init = json!({
+            "id": "chatcmpl-123",
+            "model": "deepseek-chat",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Hi"}, "finish_reason": null}]
+        });
+        chat_completions_sse_to_responses_sse(&init, &mut state);
+
+        // Finish with stop
+        let finish = json!({
+            "id": "chatcmpl-123",
+            "model": "deepseek-chat",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]
+        });
+        let events = chat_completions_sse_to_responses_sse(&finish, &mut state);
+
+        let event_types: Vec<&str> = events.iter().map(|(e, _)| e.as_str()).collect();
+        assert!(event_types.contains(&"response.content_part.done"));
+        assert!(event_types.contains(&"response.output_item.done"));
+        assert!(event_types.contains(&"response.completed"));
+
+        let completed = events
+            .iter()
+            .find(|(e, _)| e == "response.completed")
+            .unwrap();
+        assert_eq!(completed.1["response"]["status"], "completed");
+    }
+
+    #[test]
+    fn test_p3_sse_finish_tool_calls() {
+        let mut state = ChatCompletionsStreamState::new();
+
+        // Initialize with tool call
+        let init = json!({
+            "id": "chatcmpl-123",
+            "model": "deepseek-chat",
+            "choices": [{
+                "index": 0,
+                "delta": {
+                    "role": "assistant",
+                    "tool_calls": [{"index": 0, "id": "call_1", "type": "function", "function": {"name": "foo", "arguments": ""}}]
+                },
+                "finish_reason": null
+            }]
+        });
+        chat_completions_sse_to_responses_sse(&init, &mut state);
+
+        // Finish with tool_calls
+        let finish = json!({
+            "id": "chatcmpl-123",
+            "model": "deepseek-chat",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "tool_calls"}]
+        });
+        let events = chat_completions_sse_to_responses_sse(&finish, &mut state);
+
+        let event_types: Vec<&str> = events.iter().map(|(e, _)| e.as_str()).collect();
+        assert!(event_types.contains(&"response.output_item.done"));
+        assert!(event_types.contains(&"response.completed"));
+    }
+
+    #[test]
+    fn test_p3_sse_finish_length() {
+        let mut state = ChatCompletionsStreamState::new();
+
+        let init = json!({
+            "id": "chatcmpl-123",
+            "model": "deepseek-chat",
+            "choices": [{"index": 0, "delta": {"role": "assistant", "content": "Partial"}, "finish_reason": null}]
+        });
+        chat_completions_sse_to_responses_sse(&init, &mut state);
+
+        let finish = json!({
+            "id": "chatcmpl-123",
+            "model": "deepseek-chat",
+            "choices": [{"index": 0, "delta": {}, "finish_reason": "length"}]
+        });
+        let events = chat_completions_sse_to_responses_sse(&finish, &mut state);
+
+        let event_types: Vec<&str> = events.iter().map(|(e, _)| e.as_str()).collect();
+        assert!(event_types.contains(&"response.incomplete"));
+
+        let incomplete = events
+            .iter()
+            .find(|(e, _)| e == "response.incomplete")
+            .unwrap();
+        assert_eq!(incomplete.1["response"]["status"], "incomplete");
+    }
+
+    // ── Phase 3: Stream adapter test ────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_p3_cc_stream_adapter() {
+        use bytes::Bytes;
+        use futures::stream;
+
+        let sse_text = "\
+data: {\"id\":\"chatcmpl-123\",\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"\"},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"chatcmpl-123\",\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"Hello\"},\"finish_reason\":null}]}\n\n\
+data: {\"id\":\"chatcmpl-123\",\"model\":\"deepseek-chat\",\"choices\":[{\"index\":0,\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n\
+data: [DONE]\n\n";
+
+        let input_stream = stream::iter(vec![Ok::<Bytes, std::io::Error>(Bytes::from(sse_text))]);
+
+        let output_stream = create_responses_sse_stream_from_chat_completions(input_stream);
+        tokio::pin!(output_stream);
+
+        let mut collected = String::new();
+        while let Some(Ok(bytes)) = output_stream.next().await {
+            collected.push_str(&String::from_utf8_lossy(&bytes));
+        }
+
+        assert!(collected.contains("response.created"));
+        assert!(collected.contains("response.in_progress"));
+        assert!(collected.contains("response.output_item.added"));
+        assert!(collected.contains("response.output_text.delta"));
+        assert!(collected.contains("response.completed"));
+    }
+
+    #[test]
+    fn test_p3_drain_cc_sse_events() {
+        let mut buffer = String::from(
+            "data: {\"id\":\"chatcmpl-1\",\"choices\":[{\"delta\":{\"content\":\"Hi\"}}]}\n\n\
+             data: [DONE]\n\n",
+        );
+
+        let events = drain_cc_sse_events(&mut buffer);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0]["id"], "chatcmpl-1");
+        assert!(buffer.is_empty());
     }
 }

@@ -133,16 +133,23 @@ impl Provider for OpenAiProvider {
     async fn proxy_responses(
         &self,
         body: Value,
-        _is_stream: bool,
+        is_stream: bool,
     ) -> Result<reqwest::Response, ProviderError> {
-        let url = format!("{}/responses", self.base_url);
-        debug!(url = %url, "Sending passthrough Responses API request via openai");
+        use crate::transform;
+
+        // Convert Responses API request → Chat Completions request.
+        // Generic OpenAI-compatible providers (DeepSeek, Qwen, Ollama, etc.)
+        // don't support /v1/responses, so we bridge through /v1/chat/completions.
+        let cc_body = transform::responses_to_chat_completions_request(&body);
+
+        let url = format!("{}/chat/completions", self.base_url);
+        debug!(url = %url, "Sending Responses→CC bridged request via openai");
 
         let response = self
             .client
             .post(&url)
             .bearer_auth(&self.api_key)
-            .json(&body)
+            .json(&cc_body)
             .send()
             .await?;
 
@@ -150,14 +157,38 @@ impl Provider for OpenAiProvider {
         if !status.is_success() {
             let status_code = status.as_u16();
             let msg = response.text().await.unwrap_or_default();
-            error!(status = status_code, body = %msg, "openai responses proxy error");
+            error!(status = status_code, body = %msg, "openai CC bridge proxy error");
             return Err(ProviderError::ProviderResponse {
                 status: status_code,
                 message: msg,
             });
         }
 
-        Ok(response)
+        let http_resp = if is_stream {
+            // True streaming: convert Chat Completions SSE → Responses SSE event-by-event.
+            let byte_stream = response.bytes_stream();
+            let converted_stream =
+                transform::create_responses_sse_stream_from_chat_completions(byte_stream);
+            let body = reqwest::Body::wrap_stream(converted_stream);
+            http::Response::builder()
+                .status(200u16)
+                .header("content-type", "text/event-stream; charset=utf-8")
+                .body(body)
+                .map_err(|e| ProviderError::Internal(e.to_string()))?
+        } else {
+            // Non-streaming: read CC response, convert to Responses format.
+            let cc_resp: Value = response.json().await?;
+            let responses_resp = transform::chat_completions_to_responses_response(&cc_resp);
+            let json_str =
+                serde_json::to_string(&responses_resp).map_err(ProviderError::Serialisation)?;
+            http::Response::builder()
+                .status(200u16)
+                .header("content-type", "application/json")
+                .body(reqwest::Body::from(json_str))
+                .map_err(|e| ProviderError::Internal(e.to_string()))?
+        };
+
+        Ok(reqwest::Response::from(http_resp))
     }
 
     fn models(&self) -> Vec<ModelInfo> {
