@@ -15,6 +15,10 @@ use crate::schema::error::ErrorResponse;
 use crate::server::AppState;
 
 /// POST /v1/chat/completions — proxy chat completion requests.
+///
+/// When multiple providers are configured for a model, they are tried in
+/// priority order. Retryable errors (429, 5xx, transport failures) trigger
+/// failover to the next provider.
 #[instrument(skip(state, req), fields(model = %req.model, stream = req.stream.unwrap_or(false), provider = tracing::field::Empty))]
 pub async fn chat_completions(
     State(state): State<AppState>,
@@ -23,9 +27,9 @@ pub async fn chat_completions(
     let model_name = req.model.clone();
     let is_stream = req.stream.unwrap_or(false);
 
-    // Find the provider for the requested model
-    let (provider_name, provider_model) = match state.model_registry.get(&model_name) {
-        Some((pname, pmodel)) => (pname.clone(), pmodel.clone()),
+    // Find the provider list for the requested model
+    let provider_list = match state.model_registry.get(&model_name) {
+        Some(list) => list.clone(),
         None => {
             // Fall back: try to find any provider that lists this model
             let found = state
@@ -33,7 +37,7 @@ pub async fn chat_completions(
                 .iter()
                 .find(|p| p.models().iter().any(|m| m.id == model_name));
             match found {
-                Some(p) => (p.name().to_string(), model_name.clone()),
+                Some(p) => vec![(p.name().to_string(), model_name.clone())],
                 None => {
                     warn!(model = %model_name, "No provider found for model");
                     return error_response(
@@ -48,36 +52,84 @@ pub async fn chat_completions(
         }
     };
 
-    tracing::Span::current().record("provider", provider_name.as_str());
+    let total_providers = provider_list.len();
+    let mut providers_tried: Vec<String> = Vec::new();
 
-    // Resolve the upstream provider
-    let provider = match state.providers.iter().find(|p| p.name() == provider_name) {
-        Some(p) => p,
-        None => {
-            error!(provider = %provider_name, "Provider not found in registry");
-            return error_response(
-                StatusCode::INTERNAL_SERVER_ERROR,
-                ErrorResponse::internal("Provider not configured"),
-            );
+    for (attempt, (provider_name, provider_model)) in provider_list.iter().enumerate() {
+        tracing::Span::current().record("provider", provider_name.as_str());
+
+        // Resolve the upstream provider
+        let provider = match state.providers.iter().find(|p| p.name() == *provider_name) {
+            Some(p) => p,
+            None => {
+                error!(provider = %provider_name, "Provider not found in registry");
+                continue;
+            }
+        };
+
+        info!(model = %model_name, provider = %provider_name, attempt = attempt + 1, "Trying provider");
+        providers_tried.push(provider_name.clone());
+
+        // Replace the virtual model name with the upstream model name
+        let mut upstream_req = req.clone();
+        upstream_req.model = provider_model.clone();
+
+        let result = if is_stream {
+            handle_streaming(provider.as_ref(), upstream_req).await
+        } else {
+            handle_non_streaming(provider.as_ref(), upstream_req).await
+        };
+
+        match result {
+            ProviderAttempt::Success(response) => {
+                info!(model = %model_name, provider = %provider_name, "Request served by provider");
+                return response;
+            }
+            ProviderAttempt::NonRetryableError(response) => {
+                return response;
+            }
+            ProviderAttempt::RetryableError { status } => {
+                if attempt + 1 < total_providers {
+                    warn!(model = %model_name, provider = %provider_name, status, "Provider failed, falling back");
+                    continue;
+                }
+                // Last provider — return the error
+                return error_response(
+                    StatusCode::from_u16(status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                    ErrorResponse::internal(format!(
+                        "All providers failed for model '{}'. Tried: {}",
+                        model_name,
+                        providers_tried.join(", ")
+                    )),
+                );
+            }
         }
-    };
-
-    // Replace the virtual model name with the upstream model name
-    let mut upstream_req = req;
-    upstream_req.model = provider_model;
-
-    if is_stream {
-        handle_streaming(provider.as_ref(), upstream_req).await
-    } else {
-        handle_non_streaming(provider.as_ref(), upstream_req).await
     }
+
+    // All providers exhausted (e.g. none could be resolved).
+    error!(model = %model_name, providers_tried = ?providers_tried, "All providers failed");
+    error_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        ErrorResponse::internal(format!(
+            "All providers failed for model '{}'. Tried: {}",
+            model_name,
+            providers_tried.join(", ")
+        )),
+    )
+}
+
+/// Result of attempting a single provider for chat completions.
+enum ProviderAttempt {
+    Success(Response),
+    RetryableError { status: u16 },
+    NonRetryableError(Response),
 }
 
 /// Handle a non-streaming completion request.
 async fn handle_non_streaming(
     provider: &dyn crate::providers::Provider,
     req: ChatCompletionRequest,
-) -> Response {
+) -> ProviderAttempt {
     match provider.chat_completions(req).await {
         Ok(resp) => {
             info!(
@@ -87,11 +139,17 @@ async fn handle_non_streaming(
                 completion_tokens = resp.usage.completion_tokens,
                 "Non-streaming completion successful"
             );
-            Json(resp).into_response()
+            ProviderAttempt::Success(Json(resp).into_response())
         }
         Err(e) => {
-            error!(provider = provider.name(), error = %e, "Provider error");
-            map_provider_error(e)
+            let status = e.status_code();
+            if e.is_retryable() {
+                error!(provider = provider.name(), error = %e, "Provider error (retryable)");
+                ProviderAttempt::RetryableError { status }
+            } else {
+                error!(provider = provider.name(), error = %e, "Provider error");
+                ProviderAttempt::NonRetryableError(map_provider_error(e))
+            }
         }
     }
 }
@@ -100,13 +158,19 @@ async fn handle_non_streaming(
 async fn handle_streaming(
     provider: &dyn crate::providers::Provider,
     req: ChatCompletionRequest,
-) -> Response {
+) -> ProviderAttempt {
     let stream_result = provider.chat_completions_stream(req).await;
 
     match stream_result {
         Err(e) => {
-            error!(provider = provider.name(), error = %e, "Provider streaming error");
-            map_provider_error(e)
+            let status = e.status_code();
+            if e.is_retryable() {
+                error!(provider = provider.name(), error = %e, "Provider streaming error (retryable)");
+                ProviderAttempt::RetryableError { status }
+            } else {
+                error!(provider = provider.name(), error = %e, "Provider streaming error");
+                ProviderAttempt::NonRetryableError(map_provider_error(e))
+            }
         }
         Ok(chunk_stream) => {
             // Convert chunk stream to SSE event stream
@@ -134,9 +198,11 @@ async fn handle_streaming(
 
             let combined = sse_stream.chain(done_event);
 
-            Sse::new(combined)
-                .keep_alive(axum::response::sse::KeepAlive::default())
-                .into_response()
+            ProviderAttempt::Success(
+                Sse::new(combined)
+                    .keep_alive(axum::response::sse::KeepAlive::default())
+                    .into_response(),
+            )
         }
     }
 }

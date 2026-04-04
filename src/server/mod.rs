@@ -49,8 +49,9 @@ use routes::{
 pub struct AppState {
     /// Registered provider instances.
     pub providers: Arc<Vec<Box<dyn Provider>>>,
-    /// Maps every known name/alias to `(provider_name, provider_model)`.
-    pub model_registry: Arc<HashMap<String, (String, String)>>,
+    /// Maps every known name/alias to an ordered list of `(provider_name, provider_model)`.
+    /// The order is the priority order for failover (first = highest priority).
+    pub model_registry: Arc<HashMap<String, Vec<(String, String)>>>,
 }
 
 /// The HTTP server.
@@ -205,13 +206,16 @@ impl Server {
 /// Build provider instances from configuration.
 ///
 /// Returns `(providers, model_registry)` where `model_registry` maps every
-/// known name or alias to `(provider_name, provider_model)`.  When two
-/// entries claim the same key the first one wins and a warning is logged.
+/// known name or alias to an ordered list of `(provider_name, provider_model)`.
+/// The order follows the config YAML (first = highest priority for failover).
 async fn build_providers(
     config: &AppConfig,
-) -> (Vec<Box<dyn Provider>>, HashMap<String, (String, String)>) {
+) -> (
+    Vec<Box<dyn Provider>>,
+    HashMap<String, Vec<(String, String)>>,
+) {
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
-    let mut model_registry: HashMap<String, (String, String)> = HashMap::new();
+    let mut model_registry: HashMap<String, Vec<(String, String)>> = HashMap::new();
 
     // Collect model names per provider type
     let mut openai_models: Vec<(String, String, String)> = Vec::new(); // (virtual, api_key, model)
@@ -290,27 +294,28 @@ async fn build_providers(
             };
 
             if let Some(entry) = registry_entry {
-                if model_registry.contains_key(&model_cfg.name) {
-                    tracing::warn!(
-                        name = %model_cfg.name,
-                        "Duplicate model name in registry; first entry wins"
-                    );
-                } else {
-                    // Also register any declared aliases so they resolve to the same entry.
-                    if let Some(aliases) = &model_cfg.aliases {
-                        for alias in aliases {
-                            if model_registry.contains_key(alias) {
-                                tracing::warn!(
-                                    alias = %alias,
-                                    model = %model_cfg.name,
-                                    "Duplicate alias in registry; skipping"
-                                );
-                            } else {
-                                model_registry.insert(alias.clone(), entry.clone());
-                            }
-                        }
+                // Accumulate providers for this model name in priority order.
+                model_registry
+                    .entry(model_cfg.name.clone())
+                    .or_default()
+                    .push(entry);
+            }
+        }
+
+        // Register aliases pointing to the same provider list.
+        if let Some(aliases) = &model_cfg.aliases {
+            if let Some(provider_list) = model_registry.get(&model_cfg.name) {
+                let provider_list = provider_list.clone();
+                for alias in aliases {
+                    if model_registry.contains_key(alias) {
+                        tracing::warn!(
+                            alias = %alias,
+                            model = %model_cfg.name,
+                            "Duplicate alias in registry; skipping"
+                        );
+                    } else {
+                        model_registry.insert(alias.clone(), provider_list.clone());
                     }
-                    model_registry.insert(model_cfg.name.clone(), entry);
                 }
             }
         }
@@ -559,8 +564,9 @@ mod tests {
             .get("claude-haiku-4-5-20251001")
             .expect("alias missing");
         assert_eq!(primary, alias);
-        assert_eq!(primary.0, "anthropic");
-        assert_eq!(primary.1, "claude-haiku-4-5-20251001");
+        assert_eq!(primary.len(), 1);
+        assert_eq!(primary[0].0, "anthropic");
+        assert_eq!(primary[0].1, "claude-haiku-4-5-20251001");
     }
 
     #[tokio::test]
@@ -587,6 +593,46 @@ mod tests {
 
         // shared-alias resolves to model-a (first wins)
         let entry = registry.get("shared-alias").expect("shared-alias missing");
-        assert_eq!(entry.1, "model-a-upstream");
+        assert_eq!(entry[0].1, "model-a-upstream");
+    }
+
+    #[tokio::test]
+    async fn test_multiple_providers_per_model() {
+        let config = minimal_config(vec![ModelConfig {
+            name: "claude-sonnet".to_string(),
+            aliases: None,
+            providers: vec![
+                stub_deployment("anthropic", "claude-sonnet-upstream-1"),
+                stub_deployment("openai", "claude-sonnet-upstream-2"),
+            ],
+        }]);
+
+        let (_, registry) = build_providers(&config).await;
+
+        let entries = registry.get("claude-sonnet").expect("model name missing");
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, "anthropic");
+        assert_eq!(entries[0].1, "claude-sonnet-upstream-1");
+        assert_eq!(entries[1].0, "openai");
+        assert_eq!(entries[1].1, "claude-sonnet-upstream-2");
+    }
+
+    #[tokio::test]
+    async fn test_aliases_get_full_provider_list() {
+        let config = minimal_config(vec![ModelConfig {
+            name: "claude-sonnet".to_string(),
+            aliases: Some(vec!["sonnet".to_string()]),
+            providers: vec![
+                stub_deployment("anthropic", "upstream-1"),
+                stub_deployment("openai", "upstream-2"),
+            ],
+        }]);
+
+        let (_, registry) = build_providers(&config).await;
+
+        let primary = registry.get("claude-sonnet").expect("primary missing");
+        let alias = registry.get("sonnet").expect("alias missing");
+        assert_eq!(primary, alias);
+        assert_eq!(primary.len(), 2);
     }
 }

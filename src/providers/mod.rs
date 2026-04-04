@@ -65,6 +65,25 @@ impl ProviderError {
             ProviderError::Internal(_) => 500,
         }
     }
+
+    /// Whether this error is retryable and the request should be attempted
+    /// on the next provider in priority order.
+    ///
+    /// Transport failures (`Http`) are always retryable. For upstream
+    /// responses, only server-side and rate-limit statuses are retried.
+    pub fn is_retryable(&self) -> bool {
+        match self {
+            ProviderError::Http(_) => true,
+            ProviderError::ProviderResponse { status, .. } => is_retryable_status(*status),
+            ProviderError::Unsupported(_) => true, // skip to next provider that supports the API
+            _ => false,
+        }
+    }
+}
+
+/// Returns `true` for HTTP status codes that warrant failover to the next provider.
+pub fn is_retryable_status(status: u16) -> bool {
+    matches!(status, 429 | 500 | 502 | 503 | 504)
 }
 
 /// Core provider trait.
@@ -165,5 +184,44 @@ mod tests {
             ProviderError::Internal("something broke".to_string()).status_code(),
             500
         );
+    }
+
+    #[test]
+    fn test_is_retryable_status() {
+        assert!(is_retryable_status(429));
+        assert!(is_retryable_status(500));
+        assert!(is_retryable_status(502));
+        assert!(is_retryable_status(503));
+        assert!(is_retryable_status(504));
+        assert!(!is_retryable_status(400));
+        assert!(!is_retryable_status(401));
+        assert!(!is_retryable_status(403));
+        assert!(!is_retryable_status(404));
+        assert!(!is_retryable_status(200));
+    }
+
+    #[test]
+    fn test_provider_response_retryable() {
+        let retryable = ProviderError::ProviderResponse {
+            status: 429,
+            message: "rate limited".to_string(),
+        };
+        assert!(retryable.is_retryable());
+
+        let not_retryable = ProviderError::ProviderResponse {
+            status: 400,
+            message: "bad request".to_string(),
+        };
+        assert!(!not_retryable.is_retryable());
+    }
+
+    #[test]
+    fn test_unsupported_is_retryable() {
+        assert!(ProviderError::Unsupported("not supported".to_string()).is_retryable());
+    }
+
+    #[test]
+    fn test_internal_error_is_not_retryable() {
+        assert!(!ProviderError::Internal("broken".to_string()).is_retryable());
     }
 }

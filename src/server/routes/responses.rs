@@ -21,6 +21,7 @@ use flate2::read::{DeflateDecoder, GzDecoder};
 use serde_json::Value;
 use tracing::{debug, error, info, warn};
 
+use crate::providers::is_retryable_status;
 use crate::schema::error::ErrorResponse;
 use crate::server::AppState;
 
@@ -155,6 +156,10 @@ fn try_decompress(encoding: &str, data: &[u8]) -> Option<Vec<u8>> {
 }
 
 /// Shared handler for both /v1/responses and /v1/responses/compact.
+///
+/// When multiple providers are configured for a model, they are tried in
+/// priority order. Retryable errors (429, 5xx, transport failures) trigger
+/// failover to the next provider.
 async fn handle_responses(state: AppState, body: &mut Value) -> Response {
     let model_name = match body.get("model").and_then(Value::as_str) {
         Some(m) => m.to_string(),
@@ -172,8 +177,8 @@ async fn handle_responses(state: AppState, body: &mut Value) -> Response {
     let is_stream = body.get("stream").and_then(Value::as_bool).unwrap_or(false);
 
     // Look up the model in the registry.
-    let (provider_name, provider_model) = match state.model_registry.get(&model_name) {
-        Some((pname, pmodel)) => (pname.clone(), pmodel.clone()),
+    let provider_list = match state.model_registry.get(&model_name) {
+        Some(list) => list.clone(),
         None => {
             warn!(model = %model_name, "No provider found for model in /v1/responses");
             return (
@@ -187,70 +192,97 @@ async fn handle_responses(state: AppState, body: &mut Value) -> Response {
         }
     };
 
-    // Resolve the provider instance.
-    let provider = match state.providers.iter().find(|p| p.name() == provider_name) {
-        Some(p) => p,
-        None => {
-            error!(provider = %provider_name, "Provider configured in registry but not instantiated");
-            return (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                Json(ErrorResponse::internal("Provider not configured")),
-            )
-                .into_response();
+    let total_providers = provider_list.len();
+    let mut providers_tried: Vec<String> = Vec::new();
+
+    for (attempt, (provider_name, provider_model)) in provider_list.iter().enumerate() {
+        // Resolve the provider instance.
+        let provider = match state.providers.iter().find(|p| p.name() == *provider_name) {
+            Some(p) => p,
+            None => {
+                error!(provider = %provider_name, "Provider configured in registry but not instantiated");
+                continue;
+            }
+        };
+
+        info!(model = %model_name, provider = %provider_name, attempt = attempt + 1, "Trying provider");
+        providers_tried.push(provider_name.clone());
+
+        // Replace the virtual model name with the upstream model name before forwarding.
+        body["model"] = Value::String(provider_model.clone());
+
+        let upstream = match provider.proxy_responses(body.clone(), is_stream).await {
+            Ok(r) => r,
+            Err(e) => {
+                let status_code = e.status_code();
+                if e.is_retryable() && attempt + 1 < total_providers {
+                    warn!(model = %model_name, provider = %provider_name, status = status_code, "Provider failed, falling back");
+                    continue;
+                }
+                error!(error = %e, provider = %provider_name, "Responses proxy error");
+                let status =
+                    StatusCode::from_u16(status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
+                return (status, Json(ErrorResponse::internal(e.to_string()))).into_response();
+            }
+        };
+
+        // Check upstream HTTP status before streaming — retryable statuses trigger failover.
+        let upstream_status = upstream.status();
+        if !upstream_status.is_success()
+            && is_retryable_status(upstream_status.as_u16())
+            && attempt + 1 < total_providers
+        {
+            warn!(model = %model_name, provider = %provider_name, status = upstream_status.as_u16(), "Provider failed, falling back");
+            continue;
         }
-    };
 
-    // Replace the virtual model name with the upstream model name before forwarding.
-    body["model"] = Value::String(provider_model);
+        // Preserve content-type from upstream if present; fall back to a sensible default.
+        let content_type = upstream
+            .headers()
+            .get(axum::http::header::CONTENT_TYPE)
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or(if is_stream {
+                "text/event-stream"
+            } else {
+                "application/json"
+            })
+            .to_string();
 
-    let upstream = match provider.proxy_responses(body.clone(), is_stream).await {
-        Ok(r) => r,
-        Err(e) => {
-            error!(error = %e, provider = %provider_name, "Responses proxy error");
-            let status =
-                StatusCode::from_u16(e.status_code()).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            return (status, Json(ErrorResponse::internal(e.to_string()))).into_response();
-        }
-    };
-
-    // Byte-proxy the upstream response — no parsing or rewriting.
-    let upstream_status = upstream.status();
-
-    // Preserve content-type from upstream if present; fall back to a sensible default.
-    // For error responses the upstream sends JSON regardless of the stream flag.
-    let content_type = upstream
-        .headers()
-        .get(axum::http::header::CONTENT_TYPE)
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or(if is_stream {
-            "text/event-stream"
+        if upstream_status.is_success() {
+            info!(
+                model = %model_name,
+                provider = %provider_name,
+                status = upstream_status.as_u16(),
+                stream = is_stream,
+                "Request served by provider"
+            );
         } else {
-            "application/json"
-        })
-        .to_string();
+            warn!(
+                model = %model_name,
+                provider = %provider_name,
+                status = upstream_status.as_u16(),
+                stream = is_stream,
+                "Upstream returned non-2xx for responses proxy"
+            );
+        }
 
-    if upstream_status.is_success() {
-        info!(
-            model = %model_name,
-            provider = %provider_name,
-            status = upstream_status.as_u16(),
-            stream = is_stream,
-            "Responses proxy succeeded"
-        );
-    } else {
-        warn!(
-            model = %model_name,
-            provider = %provider_name,
-            status = upstream_status.as_u16(),
-            stream = is_stream,
-            "Upstream returned non-2xx for responses proxy"
-        );
+        return (
+            upstream_status,
+            [(axum::http::header::CONTENT_TYPE, content_type)],
+            Body::from_stream(upstream.bytes_stream()),
+        )
+            .into_response();
     }
 
+    // All providers exhausted.
+    error!(model = %model_name, providers_tried = ?providers_tried, "All providers failed");
     (
-        upstream_status,
-        [(axum::http::header::CONTENT_TYPE, content_type)],
-        Body::from_stream(upstream.bytes_stream()),
+        StatusCode::SERVICE_UNAVAILABLE,
+        Json(ErrorResponse::internal(format!(
+            "All providers failed for model '{}'. Tried: {}",
+            model_name,
+            providers_tried.join(", ")
+        ))),
     )
         .into_response()
 }
@@ -356,11 +388,11 @@ mod tests {
 
     fn make_app(
         providers: Vec<Box<dyn Provider>>,
-        registry: Vec<(String, String, String)>,
+        registry: Vec<(String, Vec<(String, String)>)>,
     ) -> Router {
         let mut map = std::collections::HashMap::new();
-        for (name, pname, pmodel) in registry {
-            map.insert(name, (pname, pmodel));
+        for (name, entries) in registry {
+            map.insert(name, entries);
         }
         let state = AppState {
             providers: Arc::new(providers),
@@ -370,6 +402,13 @@ mod tests {
             .route("/v1/responses", post(responses))
             .route("/v1/responses/compact", post(responses_compact))
             .with_state(state)
+    }
+
+    fn single(name: &str, pname: &str, pmodel: &str) -> (String, Vec<(String, String)>) {
+        (
+            name.to_string(),
+            vec![(pname.to_string(), pmodel.to_string())],
+        )
     }
 
     async fn post_json(app: Router, uri: &str, body: &str) -> axum::http::Response<Body> {
@@ -405,15 +444,12 @@ mod tests {
     #[tokio::test]
     async fn test_unsupported_provider_returns_405() {
         // StubProvider does not override proxy_responses, so it returns Unsupported → 405.
+        // With single provider, Unsupported is the final answer.
         let app = make_app(
             vec![Box::new(StubProvider {
                 provider_name: "anthropic",
             })],
-            vec![(
-                "claude-3".to_string(),
-                "anthropic".to_string(),
-                "claude-3-haiku".to_string(),
-            )],
+            vec![single("claude-3", "anthropic", "claude-3-haiku")],
         );
         let resp = post_json(
             app,
@@ -421,6 +457,7 @@ mod tests {
             r#"{"model": "claude-3", "input": "Hello"}"#,
         )
         .await;
+        // Single provider: Unsupported is retryable but no fallback available → 405.
         assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
     }
 
@@ -430,11 +467,7 @@ mod tests {
             vec![Box::new(ResponsesCapableStubProvider {
                 provider_name: "chatgpt-subscription",
             })],
-            vec![(
-                "gpt-5.4".to_string(),
-                "chatgpt-subscription".to_string(),
-                "gpt-5.4".to_string(),
-            )],
+            vec![single("gpt-5.4", "chatgpt-subscription", "gpt-5.4")],
         );
         let resp = post_json(
             app,
@@ -451,11 +484,7 @@ mod tests {
             vec![Box::new(ResponsesCapableStubProvider {
                 provider_name: "openai",
             })],
-            vec![(
-                "gpt-4o".to_string(),
-                "openai".to_string(),
-                "gpt-4o".to_string(),
-            )],
+            vec![single("gpt-4o", "openai", "gpt-4o")],
         );
         let resp = post_json(
             app,
@@ -515,17 +544,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_upstream_error_status_is_proxied_through() {
-        // Upstream returns 429; the route must proxy it through, not replace with 500.
+        // Single provider: upstream returns 429; the route must proxy it through.
         let app = make_app(
             vec![Box::new(UpstreamErrorStubProvider {
                 provider_name: "openai",
                 upstream_status: 429,
             })],
-            vec![(
-                "gpt-4o".to_string(),
-                "openai".to_string(),
-                "gpt-4o".to_string(),
-            )],
+            vec![single("gpt-4o", "openai", "gpt-4o")],
         );
         let resp = post_json(
             app,
@@ -538,16 +563,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_upstream_content_type_is_preserved() {
-        // When upstream sets a specific content-type, it should be forwarded.
         let app = make_app(
             vec![Box::new(ResponsesCapableStubProvider {
                 provider_name: "openai",
             })],
-            vec![(
-                "gpt-4o".to_string(),
-                "openai".to_string(),
-                "gpt-4o".to_string(),
-            )],
+            vec![single("gpt-4o", "openai", "gpt-4o")],
         );
         let resp = post_json(
             app,
@@ -563,6 +583,93 @@ mod tests {
             .to_str()
             .unwrap();
         assert_eq!(ct, "application/json");
+    }
+
+    #[tokio::test]
+    async fn test_failover_429_to_second_provider() {
+        let app = make_app(
+            vec![
+                Box::new(UpstreamErrorStubProvider {
+                    provider_name: "openai",
+                    upstream_status: 429,
+                }),
+                Box::new(ResponsesCapableStubProvider {
+                    provider_name: "chatgpt-subscription",
+                }),
+            ],
+            vec![(
+                "gpt-4o".to_string(),
+                vec![
+                    ("openai".to_string(), "gpt-4o".to_string()),
+                    ("chatgpt-subscription".to_string(), "gpt-4o".to_string()),
+                ],
+            )],
+        );
+        let resp = post_json(
+            app,
+            "/v1/responses",
+            r#"{"model": "gpt-4o", "input": "Hello"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_no_failover_on_400() {
+        let app = make_app(
+            vec![
+                Box::new(UpstreamErrorStubProvider {
+                    provider_name: "openai",
+                    upstream_status: 400,
+                }),
+                Box::new(ResponsesCapableStubProvider {
+                    provider_name: "chatgpt-subscription",
+                }),
+            ],
+            vec![(
+                "gpt-4o".to_string(),
+                vec![
+                    ("openai".to_string(), "gpt-4o".to_string()),
+                    ("chatgpt-subscription".to_string(), "gpt-4o".to_string()),
+                ],
+            )],
+        );
+        let resp = post_json(
+            app,
+            "/v1/responses",
+            r#"{"model": "gpt-4o", "input": "Hello"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn test_unsupported_skips_to_next_provider() {
+        // First provider doesn't support responses API, second does.
+        let app = make_app(
+            vec![
+                Box::new(StubProvider {
+                    provider_name: "anthropic",
+                }),
+                Box::new(ResponsesCapableStubProvider {
+                    provider_name: "openai",
+                }),
+            ],
+            vec![(
+                "my-model".to_string(),
+                vec![
+                    ("anthropic".to_string(), "my-model".to_string()),
+                    ("openai".to_string(), "my-model".to_string()),
+                ],
+            )],
+        );
+        let resp = post_json(
+            app,
+            "/v1/responses",
+            r#"{"model": "my-model", "input": "Hello"}"#,
+        )
+        .await;
+        assert_eq!(resp.status(), StatusCode::OK);
     }
 
     #[tokio::test]
