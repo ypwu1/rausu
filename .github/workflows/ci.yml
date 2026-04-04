@@ -101,6 +101,8 @@ jobs:
         run: docker build -t rausu:ci .
 
   container-scan:
+    permissions:
+      security-events: write
     name: Container Scan
     runs-on: ubuntu-latest
     needs: [docker]
