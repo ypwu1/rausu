@@ -17,6 +17,8 @@ use tracing::{info, warn};
 
 use std::path::PathBuf;
 
+pub mod tls;
+
 use crate::auth::chatgpt_oauth::{
     ensure_chatgpt_credentials, ChatGptOAuthTokenManager, ChatGptTokenSource,
 };
@@ -117,11 +119,83 @@ impl Server {
         let bind_addr = format!("{}:{}", self.config.server.host, self.config.server.port);
         let listener = TcpListener::bind(&bind_addr).await?;
 
-        info!(address = %bind_addr, "Server listening");
+        if let Some(tls_config) = &self.config.server.tls {
+            // ── TLS / mTLS path ────────────────────────────────────────────
+            let mtls = tls_config.client_ca_file.is_some();
+            let rustls_config = tls::build_rustls_server_config(tls_config)?;
+            let tls_acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(rustls_config));
 
-        axum::serve(listener, app)
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
+            info!(address = %bind_addr, tls = true, mtls = mtls, "Server listening");
+
+            // Graceful shutdown coordination
+            let (shutdown_tx, shutdown_rx) = tokio::sync::watch::channel(false);
+            let shutdown_handle = tokio::spawn(async move {
+                shutdown_signal().await;
+                let _ = shutdown_tx.send(true);
+            });
+
+            loop {
+                let mut rx = shutdown_rx.clone();
+                let accept = tokio::select! {
+                    result = listener.accept() => result,
+                    _ = async { while !*rx.borrow_and_update() { rx.changed().await.ok(); } } => break,
+                };
+
+                let (tcp_stream, _remote_addr) = match accept {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        warn!(error = %e, "TCP accept error");
+                        continue;
+                    }
+                };
+
+                let acceptor = tls_acceptor.clone();
+                let app = app.clone();
+                let mut rx = shutdown_rx.clone();
+
+                tokio::spawn(async move {
+                    let tls_stream = match acceptor.accept(tcp_stream).await {
+                        Ok(s) => s,
+                        Err(e) => {
+                            tracing::debug!(error = %e, "TLS handshake failed");
+                            return;
+                        }
+                    };
+
+                    let io = hyper_util::rt::TokioIo::new(tls_stream);
+                    let service = hyper_util::service::TowerToHyperService::new(app);
+
+                    let builder = hyper_util::server::conn::auto::Builder::new(
+                        hyper_util::rt::TokioExecutor::new(),
+                    );
+                    let conn = builder.serve_connection_with_upgrades(io, service);
+
+                    tokio::pin!(conn);
+                    tokio::select! {
+                        result = &mut conn => {
+                            if let Err(e) = result {
+                                tracing::debug!(error = %e, "Connection error");
+                            }
+                        }
+                        _ = async { while !*rx.borrow_and_update() { rx.changed().await.ok(); } } => {
+                            conn.as_mut().graceful_shutdown();
+                            if let Err(e) = conn.await {
+                                tracing::debug!(error = %e, "Connection error during shutdown");
+                            }
+                        }
+                    }
+                });
+            }
+
+            shutdown_handle.abort();
+        } else {
+            // ── Plain HTTP path ────────────────────────────────────────────
+            info!(address = %bind_addr, tls = false, "Server listening");
+
+            axum::serve(listener, app)
+                .with_graceful_shutdown(shutdown_signal())
+                .await?;
+        }
 
         info!("Server shutdown complete");
         Ok(())

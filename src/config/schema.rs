@@ -30,6 +30,9 @@ pub struct ServerConfig {
     /// Bind port (default: 4000).
     #[serde(default = "default_port")]
     pub port: u16,
+    /// Optional TLS configuration.
+    #[serde(default)]
+    pub tls: Option<TlsConfig>,
 }
 
 impl Default for ServerConfig {
@@ -37,8 +40,21 @@ impl Default for ServerConfig {
         Self {
             host: default_host(),
             port: default_port(),
+            tls: None,
         }
     }
+}
+
+/// TLS / mTLS configuration.
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TlsConfig {
+    /// Path to PEM-encoded server certificate chain (supports `${ENV_VAR}`).
+    pub cert_file: String,
+    /// Path to PEM-encoded server private key (supports `${ENV_VAR}`).
+    pub key_file: String,
+    /// Optional path to PEM-encoded CA certificate for client verification (mTLS).
+    /// When set, the server requires and verifies client certificates.
+    pub client_ca_file: Option<String>,
 }
 
 fn default_host() -> String {
@@ -166,12 +182,21 @@ impl AppConfig {
             auth_key.key = interpolate_env(&auth_key.key);
         }
 
+        // Interpolate environment variables in TLS paths
+        if let Some(tls) = &mut app_config.server.tls {
+            tls.cert_file = interpolate_env(&tls.cert_file);
+            tls.key_file = interpolate_env(&tls.key_file);
+            if let Some(ca) = &tls.client_ca_file {
+                tls.client_ca_file = Some(interpolate_env(ca));
+            }
+        }
+
         Ok(app_config)
     }
 }
 
 /// Expand `${VAR_NAME}` patterns in a string using environment variables.
-fn interpolate_env(s: &str) -> String {
+pub fn interpolate_env(s: &str) -> String {
     let mut result = s.to_string();
     while let Some(start) = result.find("${") {
         if let Some(end) = result[start..].find('}') {
@@ -251,5 +276,65 @@ mod tests {
         }
         assert_eq!(cfg.auth.keys[0].key, "rausu-sk-secret");
         std::env::remove_var("RAUSU_TEST_AUTH_KEY");
+    }
+
+    #[test]
+    fn test_default_server_config_tls_none() {
+        let cfg = ServerConfig::default();
+        assert!(cfg.tls.is_none());
+    }
+
+    #[test]
+    fn test_tls_config_deserialization() {
+        let json = r#"{
+            "server": {
+                "host": "127.0.0.1",
+                "port": 8443,
+                "tls": {
+                    "cert_file": "/etc/rausu/server.crt",
+                    "key_file": "/etc/rausu/server.key"
+                }
+            },
+            "models": []
+        }"#;
+        let cfg: AppConfig = serde_json::from_str(json).unwrap();
+        let tls = cfg.server.tls.unwrap();
+        assert_eq!(tls.cert_file, "/etc/rausu/server.crt");
+        assert_eq!(tls.key_file, "/etc/rausu/server.key");
+        assert!(tls.client_ca_file.is_none());
+    }
+
+    #[test]
+    fn test_tls_config_with_mtls() {
+        let json = r#"{
+            "server": {
+                "tls": {
+                    "cert_file": "server.crt",
+                    "key_file": "server.key",
+                    "client_ca_file": "ca.crt"
+                }
+            },
+            "models": []
+        }"#;
+        let cfg: AppConfig = serde_json::from_str(json).unwrap();
+        let tls = cfg.server.tls.unwrap();
+        assert_eq!(tls.client_ca_file.as_deref(), Some("ca.crt"));
+    }
+
+    #[test]
+    fn test_tls_env_interpolation() {
+        std::env::set_var("RAUSU_TEST_CERT", "/tmp/test.crt");
+        std::env::set_var("RAUSU_TEST_KEY", "/tmp/test.key");
+        let mut tls = TlsConfig {
+            cert_file: "${RAUSU_TEST_CERT}".to_string(),
+            key_file: "${RAUSU_TEST_KEY}".to_string(),
+            client_ca_file: None,
+        };
+        tls.cert_file = interpolate_env(&tls.cert_file);
+        tls.key_file = interpolate_env(&tls.key_file);
+        assert_eq!(tls.cert_file, "/tmp/test.crt");
+        assert_eq!(tls.key_file, "/tmp/test.key");
+        std::env::remove_var("RAUSU_TEST_CERT");
+        std::env::remove_var("RAUSU_TEST_KEY");
     }
 }

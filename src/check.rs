@@ -100,6 +100,55 @@ pub async fn run_check(cli_config: Option<&str>) -> Result<()> {
         }
     };
 
+    let mut all_ok = true;
+
+    // ── Step 1b: TLS Validation ──────────────────────────────────────────────
+    if let Some(tls) = &app_config.server.tls {
+        let mtls = tls.client_ca_file.is_some();
+        let mode_label = if mtls { "mTLS" } else { "TLS" };
+        println!(
+            "\u{1f512} {bold}Transport Security:{reset} {mode_label}",
+            bold = c.bold,
+            reset = c.reset
+        );
+
+        // Validate cert file
+        let cert_ok = validate_tls_file(&tls.cert_file, "server certificate", &c);
+        // Validate key file
+        let key_ok = validate_tls_file(&tls.key_file, "private key", &c);
+
+        // Validate client CA file if mTLS
+        let ca_ok = if let Some(ca_path) = &tls.client_ca_file {
+            validate_tls_file(ca_path, "client CA certificate", &c)
+        } else {
+            true
+        };
+
+        // Attempt to parse PEMs if files exist
+        if cert_ok && key_ok && ca_ok {
+            match crate::server::tls::build_rustls_server_config(tls) {
+                Ok(_) => {
+                    println!(
+                        "   {green}\u{2713}{reset} {mode_label} configuration valid (PEM parsed OK)",
+                        green = c.green,
+                        reset = c.reset
+                    );
+                }
+                Err(e) => {
+                    println!(
+                        "   {red}\u{2717}{reset} {mode_label} configuration invalid: {e:#}",
+                        red = c.red,
+                        reset = c.reset
+                    );
+                    all_ok = false;
+                }
+            }
+        } else {
+            all_ok = false;
+        }
+        println!();
+    }
+
     // ── Step 2: Model Validation ────────────────────────────────────────────
     let model_count = app_config.models.len();
     println!(
@@ -108,7 +157,6 @@ pub async fn run_check(cli_config: Option<&str>) -> Result<()> {
         reset = c.reset
     );
 
-    let mut all_ok = true;
     let mut provider_endpoints: Vec<ProviderEndpoint> = Vec::new();
 
     if model_count == 0 {
@@ -552,6 +600,35 @@ fn gcloud_adc_path() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from(".config"))
         .join("gcloud")
         .join("application_default_credentials.json")
+}
+
+/// Check that a TLS file path exists and is readable, printing results.
+fn validate_tls_file(path: &str, description: &str, c: &Colors) -> bool {
+    let p = std::path::Path::new(path);
+    if p.exists() {
+        if std::fs::metadata(p).is_ok_and(|m| m.len() > 0) {
+            println!(
+                "   {green}\u{2713}{reset} {description}: {path}",
+                green = c.green,
+                reset = c.reset
+            );
+            true
+        } else {
+            println!(
+                "   {red}\u{2717}{reset} {description} is empty: {path}",
+                red = c.red,
+                reset = c.reset
+            );
+            false
+        }
+    } else {
+        println!(
+            "   {red}\u{2717}{reset} {description} not found: {path}",
+            red = c.red,
+            reset = c.reset
+        );
+        false
+    }
 }
 
 // ── Tests ───────────────────────────────────────────────────────────────────

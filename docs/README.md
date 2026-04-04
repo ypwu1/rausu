@@ -323,6 +323,7 @@ See [PROTOCOL_BRIDGE_PLAN.md](PROTOCOL_BRIDGE_PLAN.md) ([中文](PROTOCOL_BRIDGE
 - [Architecture Direction — Local-First, Gateway-Compatible](ARCHITECTURE_DIRECTION.md) ([中文](ARCHITECTURE_DIRECTION_CN.md))
 - [ChatGPT Subscription Provider Design](CHATGPT_SUBSCRIPTION_DESIGN.md)
 - [Anthropic Messages API Proxy Design](MESSAGES_API_PROXY_DESIGN.md)
+- [TLS and mTLS Support](TLS_MTLS.md) ([中文](TLS_MTLS_CN.md)) — transport-layer encryption and mutual TLS
 
 ---
 
