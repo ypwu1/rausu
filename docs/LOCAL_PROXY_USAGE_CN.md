@@ -42,6 +42,14 @@ cargo build --release
 ./target/release/rausu
 ```
 
+或使用**交互式设置向导**通过问答生成配置：
+
+```bash
+./target/release/rausu setup
+# 引导你完成：Provider 选择、模型、服务器设置、认证、TLS、日志
+# 生成可直接使用的 config.yaml
+```
+
 或指定配置文件路径：
 
 ```bash

@@ -42,6 +42,14 @@ cargo build --release
 ./target/release/rausu
 ```
 
+Or use the **interactive setup wizard** to generate a config by answering prompts:
+
+```bash
+./target/release/rausu setup
+# Walks you through: provider selection, models, server settings, auth, TLS, logging
+# Writes a ready-to-use config.yaml
+```
+
 Or with an explicit config path:
 
 ```bash

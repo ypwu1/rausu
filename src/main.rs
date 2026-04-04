@@ -14,6 +14,7 @@ mod init;
 mod providers;
 mod schema;
 mod server;
+mod setup;
 mod transform;
 
 use crate::config::{paths::resolve_config_path, AppConfig};
@@ -56,6 +57,22 @@ enum Commands {
         force: bool,
     },
 
+    /// Interactive setup wizard — generates a working config via prompts.
+    ///
+    /// Walks you through provider selection, server settings, authentication,
+    /// TLS, and logging, then writes a ready-to-use YAML config file.
+    Setup {
+        /// Target path for the config file.
+        ///
+        /// Defaults to `${XDG_CONFIG_HOME:-~/.config}/rausu/config.yaml`.
+        #[arg(long)]
+        path: Option<String>,
+
+        /// Overwrite the file if it already exists.
+        #[arg(long)]
+        force: bool,
+    },
+
     /// Validate configuration and test provider connectivity.
     ///
     /// Loads the config file, checks that all models and provider deployments
@@ -73,6 +90,7 @@ async fn main() -> Result<()> {
 
     match cli.command {
         Some(Commands::Init { path, force }) => init::run_init(path.as_deref(), force),
+        Some(Commands::Setup { path, force }) => setup::run_setup(path.as_deref(), force),
         Some(Commands::Check { config }) => {
             check::run_check(config.as_deref().or(cli.config.as_deref())).await
         }
