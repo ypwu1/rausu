@@ -1,5 +1,5 @@
 # ── Builder stage ─────────────────────────────────────────────────────────────
-FROM rust:1.88-slim AS builder
+FROM rust:1.94-slim AS builder
 
 # ring crate (used by rustls/jsonwebtoken) needs a C compiler and perl
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -19,15 +19,13 @@ COPY src ./src
 RUN cargo build --release --locked
 
 # ── Runtime stage ─────────────────────────────────────────────────────────────
-FROM debian:bookworm-slim AS runtime
-
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+FROM gcr.io/distroless/cc-debian12:latest AS runtime
 
 WORKDIR /app
 
 COPY --from=builder /app/target/release/rausu /usr/local/bin/rausu
+
+USER nonroot
 
 EXPOSE 4000
 
