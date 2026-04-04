@@ -28,6 +28,16 @@
 
 ```bash
 cargo build --release
+
+# 生成模板配置文件（写入 ~/.config/rausu/config.yaml）
+./target/release/rausu init
+# 编辑该文件后启动：
+./target/release/rausu
+```
+
+或指定配置文件路径：
+
+```bash
 ./target/release/rausu --config config.yaml
 ```
 
@@ -39,6 +49,30 @@ docker run -p 4000:4000 -v $(pwd)/config.yaml:/app/config.yaml rausu
 ```
 
 ## 配置
+
+### 自动发现
+
+运行 `rausu` 时若未指定 `--config`，会按优先级搜索以下位置：
+
+1. `RAUSU_CONFIG` 环境变量
+2. `./config.yaml`
+3. `./rausu-config.yaml`
+4. `${XDG_CONFIG_HOME:-~/.config}/rausu/config.yaml`
+5. `${XDG_CONFIG_HOME:-~/.config}/rausu/rausu-config.yaml`
+6. `~/.rausu/config.yaml`
+7. `~/rausu-config.yaml`
+
+若均未找到，将在 `${XDG_CONFIG_HOME:-~/.config}/rausu/config.yaml` 生成注释版模板，并提示你先编辑后再启动。
+
+### `rausu init`
+
+```bash
+rausu init                    # 写入模板到 ~/.config/rausu/config.yaml
+rausu init --path ./my.yaml   # 写入到自定义路径
+rausu init --force            # 覆盖已有文件
+```
+
+### 手动设置
 
 复制示例配置并修改：
 

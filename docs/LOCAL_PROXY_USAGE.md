@@ -34,7 +34,17 @@ Rausu's **local runtime** is a single-user HTTP proxy that runs on your machine.
 # Build (first time only)
 cargo build --release
 
-# Run with your config
+# Generate a template config and edit it
+./target/release/rausu init
+# Created: ~/.config/rausu/config.yaml  ← edit this file
+
+# Then start Rausu (auto-discovers the config you just created)
+./target/release/rausu
+```
+
+Or with an explicit config path:
+
+```bash
 ./target/release/rausu --config config.yaml
 ```
 
@@ -46,11 +56,36 @@ cargo run -- --config config.yaml
 
 Rausu listens on `http://localhost:4000` by default (configurable via `server.host` / `server.port`).
 
+### Config auto-discovery
+
+When you run `rausu` without `--config`, it searches these locations in order and uses the first file it finds:
+
+| Priority | Location |
+|----------|----------|
+| 1 | `RAUSU_CONFIG` environment variable |
+| 2 | `./config.yaml` |
+| 3 | `./rausu-config.yaml` |
+| 4 | `${XDG_CONFIG_HOME:-~/.config}/rausu/config.yaml` |
+| 5 | `${XDG_CONFIG_HOME:-~/.config}/rausu/rausu-config.yaml` |
+| 6 | `~/.rausu/config.yaml` |
+| 7 | `~/rausu-config.yaml` |
+
+If no file is found, a commented template is written to
+`${XDG_CONFIG_HOME:-~/.config}/rausu/config.yaml` and the process exits so you can edit it first.
+
+### `rausu init` options
+
+```bash
+rausu init                         # write template to XDG default location
+rausu init --path ./config.yaml    # write to a custom path
+rausu init --force                 # overwrite if the file already exists
+```
+
 ---
 
 ## Configuration Examples
 
-Copy `config.example.yaml` as a starting point:
+Use `rausu init` to get a starting template, or copy `config.example.yaml`:
 
 ```bash
 cp config.example.yaml config.yaml

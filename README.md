@@ -28,6 +28,16 @@ A high-performance LLM API Gateway written in Rust — a drop-in replacement for
 
 ```bash
 cargo build --release
+
+# Generate a template config (written to ~/.config/rausu/config.yaml)
+./target/release/rausu init
+# Edit it, then start:
+./target/release/rausu
+```
+
+Alternatively, point to an explicit config file:
+
+```bash
 ./target/release/rausu --config config.yaml
 ```
 
@@ -39,6 +49,32 @@ docker run -p 4000:4000 -v $(pwd)/config.yaml:/app/config.yaml rausu
 ```
 
 ## Configuration
+
+### Auto-discovery
+
+When you run `rausu` without `--config`, it searches for a config file in order:
+
+1. `RAUSU_CONFIG` environment variable
+2. `./config.yaml`
+3. `./rausu-config.yaml`
+4. `${XDG_CONFIG_HOME:-~/.config}/rausu/config.yaml`
+5. `${XDG_CONFIG_HOME:-~/.config}/rausu/rausu-config.yaml`
+6. `~/.rausu/config.yaml`
+7. `~/rausu-config.yaml`
+
+If no file is found, a commented template is written to
+`${XDG_CONFIG_HOME:-~/.config}/rausu/config.yaml` and the process exits with a
+message telling you to edit it.
+
+### `rausu init`
+
+```bash
+rausu init                    # write template to ~/.config/rausu/config.yaml
+rausu init --path ./my.yaml   # write to a custom path
+rausu init --force            # overwrite an existing file
+```
+
+### Manual setup
 
 Copy `config.example.yaml` and customise:
 
