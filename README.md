@@ -14,8 +14,8 @@ A high-performance LLM API Gateway written in Rust — a drop-in replacement for
 ## Features
 
 - **OpenAI-compatible API** — works with any OpenAI SDK client
-- **Multi-provider** — supports OpenAI, Anthropic (API key), Claude Subscription (OAuth), GitHub Copilot, and ChatGPT Subscription (OAuth)
-- **Protocol Bridge** — bi-directional conversion between OpenAI Responses API and Anthropic Messages API; Codex CLI can use Claude models, Claude Code can use GPT models
+- **Multi-provider** — supports OpenAI, Anthropic (API key), Claude Subscription (OAuth), GitHub Copilot, ChatGPT Subscription (OAuth), and any OpenAI-compatible provider (DeepSeek, Qwen, Ollama, GLM, Moonshot, etc.)
+- **Protocol Bridge** — bi-directional conversion between OpenAI Responses API and Anthropic Messages API; Codex CLI can use Claude models or any OpenAI-compatible provider, Claude Code can use GPT models or any OpenAI-compatible provider
 - **True SSE Streaming** — zero-buffer per-event streaming for all paths including protocol bridge (first-token latency matches passthrough)
 - **Streaming** — full SSE streaming support
 - **Single binary** — zero runtime dependencies
@@ -182,14 +182,16 @@ response = client.chat.completions.create(
 
 All client-model combinations are supported via passthrough or protocol bridge:
 
-| Client | Protocol | Model | Path |
-|--------|---------|-------|------|
+| Client | Protocol | Target | Path |
+|--------|---------|--------|------|
 | Claude Code | `/v1/messages` | Claude (Copilot) | Passthrough |
 | Claude Code | `/v1/messages` | Claude (Anthropic) | Passthrough |
 | Claude Code | `/v1/messages` | GPT (ChatGPT sub) | Messages→Responses bridge |
+| Claude Code | `/v1/messages` | Any OpenAI-compatible | Messages→Responses→ChatCompletions |
 | Codex CLI | `/v1/responses` | GPT (ChatGPT sub) | Passthrough |
 | Codex CLI | `/v1/responses` | GPT (Copilot) | Passthrough |
 | Codex CLI | `/v1/responses` | Claude (Copilot) | Responses→Messages bridge |
+| Codex CLI | `/v1/responses` | Any OpenAI-compatible | Responses→ChatCompletions bridge |
 
 See [docs/PROTOCOL_BRIDGE_PLAN.md](docs/PROTOCOL_BRIDGE_PLAN.md) for protocol conversion details.
 

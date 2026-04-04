@@ -16,6 +16,8 @@
 | Codex CLI | `/v1/responses` (OpenAI) | GPT (Copilot) | 透传 | ✅ 已完成 |
 | Codex CLI | `/v1/responses` (OpenAI) | Claude (Copilot) | Responses→Messages 转换 | ✅ Phase 1 已完成 |
 | Codex CLI | `/v1/responses` (OpenAI) | Claude (Anthropic) | Responses→Messages 转换 | ✅ Phase 1 已完成 |
+| Codex CLI | `/v1/responses` (OpenAI) | 任意 OpenAI 兼容服务 | Responses→ChatCompletions 转换 | ✅ Phase 3 已完成 |
+| Claude Code | `/v1/messages` (Anthropic) | 任意 OpenAI 兼容服务 | Messages→Responses→ChatCompletions | ✅ Phase 3 已完成 |
 
 ## 协议差异概览
 
@@ -99,6 +101,46 @@ Phase 1 的反向。触发条件：ChatGPT/Copilot provider 的 `proxy_messages(
 
 转换逻辑与 Phase 1 互为反函数。
 
+### Phase 3: Codex CLI 用任意 OpenAI 兼容模型（Responses→ChatCompletions）
+
+**触发条件：** OpenAI provider 的 `proxy_responses()` — 当 `base_url` 指向非官方 OpenAI 端点（通用 OpenAI 兼容服务）时自动激活。
+
+**适用场景：** DeepSeek、Qwen（阿里云 DashScope）、Ollama、GLM、Moonshot、百川、Yi、MiniMax 等任意实现 Chat Completions API 的服务。
+
+**请求转换 (Responses → Chat Completions):**
+```
+input (string)         → messages: [{role: "user", content: input}]
+input (array of items) → messages (按 role 提取 message items)
+instructions           → system message (prepended)
+model                  → model
+stream                 → stream
+max_output_tokens      → max_tokens
+temperature            → temperature
+tools (function type)  → tools (Chat Completions 格式)
+tool_choice            → tool_choice
+```
+
+**响应转换 (Chat Completions → Responses):**
+```
+id: "chatcmpl-xxx"     → id: "resp_xxx"
+choices[0].message:
+  - content            → output: [{type: "message", content: [{type: "output_text"}]}]
+  - tool_calls         → output: [{type: "function_call", call_id, name, arguments}]
+finish_reason          → status (stop→completed, length→incomplete, tool_calls→completed)
+usage                  → usage (+ total_tokens)
+```
+
+**流式转换 (Chat Completions SSE → Responses SSE):**
+```
+[首个 delta]           → response.created + response.in_progress + output_item.added
+content delta          → response.output_text.delta
+tool_calls delta       → response.function_call_arguments.delta
+finish_reason=stop     → response.completed
+finish_reason=length   → response.incomplete
+```
+
+**Claude Code 用任意 OpenAI 兼容模型：** 通过 Phase 2（Messages→Responses）+ Phase 3（Responses→ChatCompletions）串联实现，无需额外配置。
+
 ## 参考代码
 
 cc-switch 项目 (`github.com/farion1231/cc-switch`) 有完整实现：
@@ -117,6 +159,7 @@ cc-switch 项目 (`github.com/farion1231/cc-switch`) 有完整实现：
 5. Phase 2B: 流式 Responses SSE → Messages SSE 转换 + 测试 ✅
 6. Phase 2C: ChatGPT provider `proxy_messages()` 集成 ✅
 7. True SSE Streaming: async-stream Stream→Stream 适配器，零缓冲逐事件中继 ✅
+8. Phase 3: OpenAI provider `proxy_responses()` 通用桥接（Responses→ChatCompletions）集成 ✅
 
 ## 工具调用映射
 
@@ -145,3 +188,4 @@ Codex CLI 的 tool calling 对 agent 功能至关重要，不能省略。
 - Phase 1 实现完成：2026-04-04
 - Phase 2 实现完成：2026-04-04
 - True SSE Streaming 实现完成：2026-04-04（commit 078eb3e）
+- Phase 3 实现完成：2026-04-04（commit a14e455）

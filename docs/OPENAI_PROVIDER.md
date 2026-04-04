@@ -4,14 +4,16 @@
 
 ## Overview
 
-The `openai` provider routes requests to the OpenAI API using an API key. It supports OpenAI Chat Completions and the Responses API, and accepts any model that your API key has access to.
+The `openai` provider routes requests to the OpenAI API or any **OpenAI-compatible** endpoint using an API key. It supports Chat Completions, the Responses API, and works with any provider that implements the OpenAI Chat Completions format — DeepSeek, Qwen (Aliyun DashScope), Ollama, GLM, Moonshot, Baichuan, Yi, MiniMax, and more.
+
+**Phase 3 protocol bridge:** When Codex CLI sends Responses API requests (`/v1/responses`) to a generic OpenAI-compatible provider, Rausu automatically bridges Responses → Chat Completions format. This means Codex CLI works with any provider backed by `provider: openai` + `base_url` without any client-side configuration.
 
 ## Support matrix
 
 | Endpoint | Support |
 |---|---|
 | `POST /v1/chat/completions` | ✅ (streaming + non-streaming) |
-| `POST /v1/responses` | ✅ native Responses API passthrough |
+| `POST /v1/responses` | ✅ native passthrough (OpenAI); Responses→ChatCompletions bridge (generic providers) |
 | `GET /v1/models` | ✅ lists configured model names |
 | `POST /v1/messages` | ❌ Use `provider: anthropic` for Anthropic Messages API |
 
@@ -111,6 +113,88 @@ Overrides the default `https://api.openai.com/v1` endpoint. Use this to point at
 base_url: "https://your-azure-endpoint.openai.azure.com/openai/deployments/gpt-4o"
 ```
 
+## OpenAI-compatible Providers (Phase 3)
+
+Any provider with an OpenAI-compatible Chat Completions endpoint works by setting `base_url`. When Codex CLI uses the Responses API against these providers, Rausu bridges Responses → Chat Completions automatically.
+
+### DeepSeek
+
+```yaml
+models:
+  - name: deepseek-chat
+    providers:
+      - provider: openai
+        model: deepseek-chat
+        base_url: https://api.deepseek.com/v1
+        api_key: sk-xxx
+  - name: deepseek-reasoner
+    providers:
+      - provider: openai
+        model: deepseek-reasoner
+        base_url: https://api.deepseek.com/v1
+        api_key: sk-xxx
+```
+
+```bash
+export OPENAI_BASE_URL=http://localhost:4000
+codex --model deepseek-chat
+```
+
+### Qwen (Aliyun DashScope)
+
+```yaml
+models:
+  - name: qwen-max
+    providers:
+      - provider: openai
+        model: qwen-max
+        base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+        api_key: sk-xxx
+  - name: qwen-plus
+    providers:
+      - provider: openai
+        model: qwen-plus
+        base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+        api_key: sk-xxx
+```
+
+### Ollama (local)
+
+```yaml
+models:
+  - name: llama3
+    providers:
+      - provider: openai
+        model: llama3
+        base_url: http://localhost:11434/v1
+        api_key: ollama   # Ollama ignores this; any non-empty value works
+  - name: qwen2.5-coder
+    providers:
+      - provider: openai
+        model: qwen2.5-coder:7b
+        base_url: http://localhost:11434/v1
+        api_key: ollama
+```
+
+```bash
+export OPENAI_BASE_URL=http://localhost:4000
+codex --model llama3
+```
+
+### Other compatible providers
+
+The same pattern works for any OpenAI-compatible endpoint:
+
+| Provider | `base_url` |
+|---|---|
+| Moonshot (Kimi) | `https://api.moonshot.cn/v1` |
+| GLM (Zhipu AI) | `https://open.bigmodel.cn/api/paas/v4` |
+| Yi (01.AI) | `https://api.lingyiwanwu.com/v1` |
+| MiniMax | `https://api.minimax.chat/v1` |
+| Baichuan | `https://api.baichuan-ai.com/v1` |
+| Groq | `https://api.groq.com/openai/v1` |
+| Together AI | `https://api.together.xyz/v1` |
+
 ## Upstream model names
 
 Any model available on your OpenAI account can be used. Common examples:
@@ -138,5 +222,6 @@ docker run \
 ## Known limitations
 
 - **No `/v1/messages` support.** Use `provider: anthropic` for Anthropic-native routing.
-- Rate limits and model availability are controlled by OpenAI — Rausu propagates the upstream HTTP status code unchanged.
+- Rate limits and model availability are controlled by the upstream provider — Rausu propagates the upstream HTTP status code unchanged.
 - Tool/function calling is passed through as-is in the Chat Completions format; no additional translation is performed.
+- Generic providers via `base_url` must support the OpenAI Chat Completions API format. Providers with non-standard formats are not supported.

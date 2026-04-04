@@ -90,7 +90,8 @@ Rausu solves these by being a **zero-overhead proxy** — it adds microseconds, 
 - ✅ **Anthropic Provider** — Automatic OpenAI ↔ Anthropic Messages API translation
 - ✅ **GitHub Copilot Provider** — Claude and GPT models via your Copilot subscription
 - ✅ **ChatGPT Subscription Provider** — GPT models via your ChatGPT Plus/Pro/Max subscription
-- ✅ **Protocol Bridge** — Bi-directional Responses API ↔ Messages API conversion; Codex CLI can use Claude models, Claude Code can use GPT models; full tool calling and thinking block support
+- ✅ **OpenAI-compatible Provider Support** — Use DeepSeek, Qwen, Ollama, GLM, Moonshot, Baichuan, Yi, MiniMax, and any OpenAI-compatible API with `provider: openai` + `base_url`
+- ✅ **Protocol Bridge** — Bi-directional Responses API ↔ Messages API conversion; Codex CLI can use Claude models or any OpenAI-compatible provider, Claude Code can use GPT models or any OpenAI-compatible provider; full tool calling and thinking block support
 - ✅ **True SSE Streaming** — Zero-buffer per-event streaming on all paths including protocol bridge; first-token latency matches passthrough
 - ✅ **SSE Streaming** — Chunk-by-chunk relay with proper `data: [DONE]` termination
 - ✅ **Structured Logging** — JSON logs with request ID, model, provider, latency, tokens
@@ -294,14 +295,16 @@ Adding a new provider? Implement the `Provider` trait — see [CONTRIBUTING.md](
 
 Rausu implements a bi-directional protocol bridge between the OpenAI Responses API and the Anthropic Messages API. This enables any client × model combination:
 
-| Client | Protocol | Model | Path |
-|--------|---------|-------|------|
+| Client | Protocol | Target | Path |
+|--------|---------|--------|------|
 | Claude Code | `/v1/messages` | Claude (Copilot) | Passthrough |
 | Claude Code | `/v1/messages` | Claude (Anthropic) | Passthrough |
 | Claude Code | `/v1/messages` | GPT (ChatGPT sub) | Messages→Responses bridge |
+| Claude Code | `/v1/messages` | Any OpenAI-compatible | Messages→Responses→ChatCompletions |
 | Codex CLI | `/v1/responses` | GPT (ChatGPT sub) | Passthrough |
 | Codex CLI | `/v1/responses` | GPT (Copilot) | Passthrough |
 | Codex CLI | `/v1/responses` | Claude (Copilot) | Responses→Messages bridge |
+| Codex CLI | `/v1/responses` | Any OpenAI-compatible | Responses→ChatCompletions bridge |
 
 **Bridge features:**
 - Full tool calling support — `function_call` ↔ `tool_use` with argument JSON serialization

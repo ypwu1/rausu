@@ -153,6 +153,48 @@ models:
 
 The `credentials_file` source works automatically if you are logged in via Claude Code or the Claude CLI — no extra setup needed.
 
+### OpenAI-compatible Providers (DeepSeek, Qwen, Ollama, etc.)
+
+Any provider with an OpenAI-compatible Chat Completions API works via `provider: openai` + `base_url`. Codex CLI can use these providers directly — Rausu bridges the Responses API to Chat Completions format automatically (Phase 3).
+
+```yaml
+models:
+  # DeepSeek
+  - name: deepseek-chat
+    providers:
+      - provider: openai
+        model: deepseek-chat
+        base_url: https://api.deepseek.com/v1
+        api_key: "${DEEPSEEK_API_KEY}"
+
+  # Qwen (Aliyun DashScope)
+  - name: qwen-max
+    providers:
+      - provider: openai
+        model: qwen-max
+        base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+        api_key: "${DASHSCOPE_API_KEY}"
+
+  # Ollama (local — no API key required)
+  - name: llama3
+    providers:
+      - provider: openai
+        model: llama3
+        base_url: http://localhost:11434/v1
+        api_key: ollama
+```
+
+```bash
+# Use Codex CLI with any of these models
+export OPENAI_BASE_URL=http://localhost:4000
+export OPENAI_API_KEY=local-proxy
+codex --model deepseek-chat
+codex --model qwen-max
+codex --model llama3
+```
+
+See [OPENAI_PROVIDER.md](OPENAI_PROVIDER.md) for a full list of supported providers and their `base_url` values.
+
 ### Mixed-Model Config (All Providers)
 
 A single Rausu config can expose multiple virtual model names backed by different providers:
@@ -260,6 +302,47 @@ codex --model gpt-5.3-codex
 ```
 
 Codex will send requests to `http://localhost:4000/v1/responses`, and Rausu will relay them upstream with the real credentials.
+
+---
+
+## Codex CLI with OpenAI-compatible Providers (via Phase 3 Bridge)
+
+Codex CLI can use DeepSeek, Qwen, Ollama, and any OpenAI-compatible provider. Rausu automatically bridges the Responses API request to Chat Completions format.
+
+**Step 1 — Configure Rausu** with an OpenAI-compatible provider:
+
+```yaml
+models:
+  - name: deepseek-chat
+    providers:
+      - provider: openai
+        model: deepseek-chat
+        base_url: https://api.deepseek.com/v1
+        api_key: "${DEEPSEEK_API_KEY}"
+
+  - name: llama3
+    providers:
+      - provider: openai
+        model: llama3
+        base_url: http://localhost:11434/v1
+        api_key: ollama
+```
+
+**Step 2 — Start Rausu:**
+
+```bash
+./target/release/rausu --config config.yaml
+```
+
+**Step 3 — Point Codex CLI at Rausu:**
+
+```bash
+export OPENAI_BASE_URL=http://localhost:4000
+export OPENAI_API_KEY=local-proxy
+codex --model deepseek-chat
+```
+
+Rausu receives the `/v1/responses` request from Codex CLI, converts it to Chat Completions format, forwards to the upstream provider, and converts the response back — all transparently.
 
 ---
 
@@ -383,8 +466,8 @@ In Claude Code's model picker, select `gpt-5.4`. Rausu bridges the `/v1/messages
 | `POST` | `/v1/messages` | Anthropic Messages API — transparent passthrough (Claude Code) |
 
 **Passthrough vs. protocol bridge:**
-- `/v1/responses` — forwarded as-is when the upstream supports Responses API natively (OpenAI, ChatGPT subscription, Copilot GPT models). For Claude models via Copilot, Rausu bridges Responses→Messages automatically.
-- `/v1/messages` — forwarded as-is for Claude providers. For GPT models via ChatGPT subscription, Rausu bridges Messages→Responses automatically.
+- `/v1/responses` — forwarded as-is when the upstream supports Responses API natively (OpenAI, ChatGPT subscription, Copilot GPT models). For Claude models via Copilot, Rausu bridges Responses→Messages. For any OpenAI-compatible provider via `base_url`, Rausu bridges Responses→ChatCompletions (Phase 3).
+- `/v1/messages` — forwarded as-is for Claude providers. For GPT models via ChatGPT subscription, Rausu bridges Messages→Responses. For OpenAI-compatible providers, Rausu bridges Messages→Responses→ChatCompletions.
 - `/v1/chat/completions` — routed through the provider abstraction layer; Rausu normalizes the request/response format as needed.
 
 ---

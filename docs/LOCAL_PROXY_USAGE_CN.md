@@ -153,6 +153,48 @@ models:
 
 如果你已通过 Claude Code 或 Claude CLI 登录，`credentials_file` 来源可自动生效，无需额外配置。
 
+### OpenAI 兼容 Provider（DeepSeek、Qwen、Ollama 等）
+
+任何实现 OpenAI 兼容 Chat Completions API 的服务，通过 `provider: openai` + `base_url` 即可接入。Codex CLI 可直接使用这些服务——Rausu 自动将 Responses API 桥接为 Chat Completions 格式（Phase 3）。
+
+```yaml
+models:
+  # DeepSeek
+  - name: deepseek-chat
+    providers:
+      - provider: openai
+        model: deepseek-chat
+        base_url: https://api.deepseek.com/v1
+        api_key: "${DEEPSEEK_API_KEY}"
+
+  # Qwen（阿里云 DashScope）
+  - name: qwen-max
+    providers:
+      - provider: openai
+        model: qwen-max
+        base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+        api_key: "${DASHSCOPE_API_KEY}"
+
+  # Ollama（本地，无需 API Key）
+  - name: llama3
+    providers:
+      - provider: openai
+        model: llama3
+        base_url: http://localhost:11434/v1
+        api_key: ollama
+```
+
+```bash
+# 使用 Codex CLI 访问任意上述模型
+export OPENAI_BASE_URL=http://localhost:4000
+export OPENAI_API_KEY=local-proxy
+codex --model deepseek-chat
+codex --model qwen-max
+codex --model llama3
+```
+
+完整的支持 Provider 列表及其 `base_url` 值见 [OPENAI_PROVIDER_CN.md](OPENAI_PROVIDER_CN.md)。
+
 ### 混合模型配置（全部 Provider）
 
 单一 Rausu 配置文件可同时暴露多个虚拟模型名称，各自对应不同的 Provider：
@@ -260,6 +302,47 @@ codex --model gpt-5.3-codex
 ```
 
 Codex 将把请求发送到 `http://localhost:4000/v1/responses`，Rausu 会携带真实凭证将请求转发到上游。
+
+---
+
+## Codex CLI 使用 OpenAI 兼容服务（通过 Phase 3 桥接）
+
+Codex CLI 可使用 DeepSeek、Qwen、Ollama 及任意 OpenAI 兼容服务。Rausu 自动将 Responses API 请求桥接为 Chat Completions 格式。
+
+**第一步 — 配置 Rausu**，声明 OpenAI 兼容服务：
+
+```yaml
+models:
+  - name: deepseek-chat
+    providers:
+      - provider: openai
+        model: deepseek-chat
+        base_url: https://api.deepseek.com/v1
+        api_key: "${DEEPSEEK_API_KEY}"
+
+  - name: llama3
+    providers:
+      - provider: openai
+        model: llama3
+        base_url: http://localhost:11434/v1
+        api_key: ollama
+```
+
+**第二步 — 启动 Rausu：**
+
+```bash
+./target/release/rausu --config config.yaml
+```
+
+**第三步 — 将 Codex CLI 指向 Rausu：**
+
+```bash
+export OPENAI_BASE_URL=http://localhost:4000
+export OPENAI_API_KEY=local-proxy
+codex --model deepseek-chat
+```
+
+Rausu 接收来自 Codex CLI 的 `/v1/responses` 请求，转换为 Chat Completions 格式，转发到上游服务，再将响应转换回 Responses 格式——全程透明。
 
 ---
 
@@ -383,8 +466,8 @@ claude
 | `POST` | `/v1/messages` | Anthropic Messages API — 透明直传（Claude Code） |
 
 **直传 vs. 协议桥接：**
-- `/v1/responses` — 当上游原生支持 Responses API 时（OpenAI、ChatGPT 订阅、Copilot GPT 模型）原样转发。对于通过 Copilot 使用的 Claude 模型，Rausu 自动进行 Responses→Messages 桥接。
-- `/v1/messages` — 对 Claude provider 原样转发。对于通过 ChatGPT 订阅使用的 GPT 模型，Rausu 自动进行 Messages→Responses 桥接。
+- `/v1/responses` — 当上游原生支持 Responses API 时（OpenAI、ChatGPT 订阅、Copilot GPT 模型）原样转发。对于通过 Copilot 使用的 Claude 模型，Rausu 自动进行 Responses→Messages 桥接。对于通过 `base_url` 接入的 OpenAI 兼容服务，Rausu 自动进行 Responses→ChatCompletions 桥接（Phase 3）。
+- `/v1/messages` — 对 Claude provider 原样转发。对于通过 ChatGPT 订阅使用的 GPT 模型，Rausu 自动进行 Messages→Responses 桥接。对于 OpenAI 兼容服务，Rausu 自动串联 Messages→Responses→ChatCompletions 桥接。
 - `/v1/chat/completions` — 经过 Provider 抽象层路由，Rausu 根据需要进行请求/响应格式归一化处理。
 
 ---

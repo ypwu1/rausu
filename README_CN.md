@@ -14,8 +14,8 @@
 ## 特性
 
 - **OpenAI 兼容 API** — 适配任何 OpenAI SDK 客户端
-- **多 Provider 支持** — 支持 OpenAI、Anthropic（API Key）、Claude 订阅（OAuth）、GitHub Copilot 及 ChatGPT 订阅（OAuth）
-- **协议桥接** — OpenAI Responses API 与 Anthropic Messages API 双向转换；Codex CLI 可使用 Claude 模型，Claude Code 可使用 GPT 模型
+- **多 Provider 支持** — 支持 OpenAI、Anthropic（API Key）、Claude 订阅（OAuth）、GitHub Copilot、ChatGPT 订阅（OAuth），以及任意 OpenAI 兼容服务（DeepSeek、Qwen、Ollama、GLM、Moonshot 等）
+- **协议桥接** — OpenAI Responses API 与 Anthropic Messages API 双向转换；Codex CLI 可使用 Claude 模型或任意 OpenAI 兼容服务，Claude Code 可使用 GPT 模型或任意 OpenAI 兼容服务
 - **真正的 SSE 流式传输** — 包括协议桥接路径在内的所有路径均实现零缓冲逐事件流式传输（首 token 延迟与直传路径一致）
 - **流式传输** — 完整的 SSE 流式支持
 - **单一二进制** — 零运行时依赖
@@ -182,14 +182,16 @@ response = client.chat.completions.create(
 
 所有客户端与模型的组合均支持，通过直传或协议桥接实现：
 
-| 客户端 | 协议 | 模型 | 路径 |
+| 客户端 | 协议 | 目标 | 路径 |
 |--------|------|------|------|
 | Claude Code | `/v1/messages` | Claude（Copilot） | 直传 |
 | Claude Code | `/v1/messages` | Claude（Anthropic） | 直传 |
 | Claude Code | `/v1/messages` | GPT（ChatGPT 订阅） | Messages→Responses 桥接 |
+| Claude Code | `/v1/messages` | 任意 OpenAI 兼容服务 | Messages→Responses→ChatCompletions |
 | Codex CLI | `/v1/responses` | GPT（ChatGPT 订阅） | 直传 |
 | Codex CLI | `/v1/responses` | GPT（Copilot） | 直传 |
 | Codex CLI | `/v1/responses` | Claude（Copilot） | Responses→Messages 桥接 |
+| Codex CLI | `/v1/responses` | 任意 OpenAI 兼容服务 | Responses→ChatCompletions 桥接 |
 
 详细协议转换说明见 [docs/PROTOCOL_BRIDGE_PLAN_CN.md](docs/PROTOCOL_BRIDGE_PLAN_CN.md)。
 
