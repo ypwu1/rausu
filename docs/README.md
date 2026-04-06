@@ -324,6 +324,7 @@ See [PROTOCOL_BRIDGE_PLAN.md](PROTOCOL_BRIDGE_PLAN.md) ([中文](PROTOCOL_BRIDGE
 - [ChatGPT Subscription Provider Design](CHATGPT_SUBSCRIPTION_DESIGN.md)
 - [Anthropic Messages API Proxy Design](MESSAGES_API_PROXY_DESIGN.md)
 - [TLS and mTLS Support](TLS_MTLS.md) ([中文](TLS_MTLS_CN.md)) — transport-layer encryption and mutual TLS
+- [Tool Compatibility & Capability Checking (Draft)](TOOL_COMPATIBILITY_DRAFT.md) ([中文](TOOL_COMPATIBILITY_DRAFT_CN.md)) — tool-aware passthrough, provider capability model, no-silent-degradation rule
 
 ---
 
