@@ -37,7 +37,7 @@ base64 = "0.22"
 http = "1"
 flate2 = "1"
 zstd = "0.13"
-jsonwebtoken = { version = "9", features = ["use_pem"] }
+jsonwebtoken = { version = "10", features = ["use_pem"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "logging", "std", "tls12"] }
 tokio-rustls = "0.26"
 rustls-pemfile = "2"
