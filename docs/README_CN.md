@@ -36,11 +36,11 @@
 
 ## 什么是 Rausu？
 
-Rausu（ラウス）是一个用 Rust 编写的**高性能 LLM API 网关**——作为 LiteLLM Proxy 的替代方案，在性能、内存占用和部署便捷性上全面超越。
+Rausu（ラウス）是一个用 Rust 编写的**高性能 LLM API 网关**——单一二进制、协议感知的代理，通过统一的 OpenAI 兼容 API 将请求路由到多个 LLM 供应商。
 
-它提供**统一的 OpenAI 兼容 API**，将请求代理到 100+ 家 LLM 供应商。任何能调 OpenAI 的客户端都可以直接对接 Rausu，零代码改动。
+任何能调 OpenAI API 的客户端都可以直接对接 Rausu，零代码改动。Rausu 自动处理 Provider 认证、协议转换（OpenAI ↔ Anthropic）和真正的 SSE 流式传输。
 
-整个系统编译为一个 **30MB 以内的单一二进制文件**。不需要 Python 运行时，不需要 node_modules，不需要 Docker（但支持 Docker）。
+整个系统编译为**单一二进制文件**。不需要 Python 运行时，不需要 node_modules，不需要 Docker（但支持 Docker）。
 
 ```bash
 # 下载并运行
@@ -54,29 +54,11 @@ chmod +x rausu
 
 ## 为什么选 Rausu？
 
-### Rausu vs LiteLLM — 实测数据，不是营销
-
-| 指标 | Rausu (Rust) | LiteLLM (Python) |
-|------|:------------:|:----------------:|
-| **P95 延迟（代理开销）** | **< 2ms** | ~8ms |
-| **空闲内存** | **~20MB** | ~200MB+ |
-| **安装体积** | **~25MB** | ~300MB+（Python + 依赖） |
-| **最大并发连接** | **10,000+** | ~1,000（每 worker） |
-| **启动时间** | **< 1s** | ~3-5s |
-| **运行时依赖** | **无** | Python 3.11+, pip, venv |
-| **Docker 镜像** | **< 50MB** | ~500MB+ |
-| **部署方式** | **单二进制** | 多文件 + 运行时 |
-
-### 为什么不直接用 LiteLLM？
-
-LiteLLM 是优秀的软件，验证了市场需求。但 Python 作为 API 代理有天然局限：
-
-- **GIL** — 真正的并行需要多进程，每个进程消耗 200MB+
-- **依赖地狱** — `pip install litellm[proxy]` 拉取数百个包
-- **冷启动** — Python 解释器启动 + 模块加载需要数秒
-- **内存** — Python 的 GC 和对象开销对于一个本应透明的代理来说太重了
-
-Rausu 的解决方案是做一个**零开销代理**——增加的是微秒级延迟，不是毫秒级。
+- **本地优先** — 作为单用户代理在本地运行，适配 Codex CLI、Claude Code 及任何 OpenAI SDK
+- **轻量网关** — 同样适用于小团队或 Homelab 的自托管网关场景
+- **零开销代理** — Rust 异步运行时和零拷贝流式传输，将代理开销控制在毫秒级以下
+- **单一二进制，零依赖** — 一个可执行文件，无需安装运行时，无需包管理器
+- **协议感知** — OpenAI Responses API 与 Anthropic Messages API 双向桥接，任何客户端可搭配任何 Provider
 
 ---
 

@@ -36,11 +36,11 @@
 
 ## What is Rausu?
 
-Rausu (ラウス) is a **high-performance LLM API Gateway** written in Rust — a drop-in replacement for LiteLLM Proxy that delivers significantly better performance, a smaller memory footprint, and simpler deployment.
+Rausu (ラウス) is a **high-performance LLM API gateway** written in Rust — a single-binary, protocol-aware proxy that routes requests across multiple LLM providers through a unified OpenAI-compatible API.
 
-It provides a **unified OpenAI-compatible API** that proxies requests to 100+ LLM providers. Any client that speaks OpenAI can talk to Rausu without code changes.
+Any client that speaks the OpenAI API can talk to Rausu without code changes. Rausu handles provider authentication, protocol translation (OpenAI ↔ Anthropic), and true SSE streaming transparently.
 
-The entire system compiles to a **single binary under 30MB**. No Python runtime, no node_modules, no Docker required (but supported).
+The entire system compiles to a **single binary**. No Python runtime, no node_modules, no Docker required (but supported).
 
 ```bash
 # Download and run
@@ -54,29 +54,11 @@ chmod +x rausu
 
 ## Why Rausu?
 
-### Rausu vs LiteLLM — Measured, Not Marketed
-
-| Metric | Rausu (Rust) | LiteLLM (Python) |
-|--------|:------------:|:----------------:|
-| **P95 Latency (proxy overhead)** | **< 2ms** | ~8ms |
-| **Idle Memory** | **~20MB** | ~200MB+ |
-| **Binary / Install Size** | **~25MB** | ~300MB+ (Python + deps) |
-| **Max Concurrent Connections** | **10,000+** | ~1,000 (per worker) |
-| **Startup Time** | **< 1s** | ~3-5s |
-| **Runtime Dependencies** | **None** | Python 3.11+, pip, venv |
-| **Docker Image** | **< 50MB** | ~500MB+ |
-| **Deployment** | **Single binary** | Multi-file + runtime |
-
-### Why Not Just Use LiteLLM?
-
-LiteLLM is excellent software that proved the market need. But Python has inherent limitations for an API proxy:
-
-- **GIL** — True parallelism requires multiple processes, each consuming 200MB+
-- **Dependency hell** — `pip install litellm[proxy]` pulls hundreds of packages
-- **Cold start** — Python interpreter startup + module loading adds seconds
-- **Memory** — Python's garbage collector and object overhead are significant for a proxy that should be transparent
-
-Rausu solves these by being a **zero-overhead proxy** — it adds microseconds, not milliseconds.
+- **Local-first** — runs as a single-user proxy on your machine for tools like Codex CLI, Claude Code, and any OpenAI SDK
+- **Lightweight gateway** — also suitable as a self-hosted gateway for small teams or homelab setups
+- **Zero-overhead proxy** — Rust's async runtime and zero-copy streaming keep proxy overhead in the low-millisecond range
+- **Single binary, zero dependencies** — one executable, no runtime to install, no package manager needed
+- **Protocol-aware** — bi-directional bridge between OpenAI Responses API and Anthropic Messages API, so any client works with any provider
 
 ---
 
