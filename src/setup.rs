@@ -138,6 +138,17 @@ fn load_or_create(target: &Path) -> Result<AppConfig> {
 
 // ── Main editor loop ─────────────────────────────────────────────────────────
 
+/// Outcome of a save attempt, used to decide whether the editor loop continues.
+#[derive(Debug, PartialEq)]
+enum SaveOutcome {
+    /// Config was written to disk — exit the editor.
+    SavedAndExit,
+    /// Save was blocked (validation errors) — stay in the editor.
+    BlockedStayInEditor,
+    /// User cancelled the confirmation prompt — stay in the editor.
+    CancelledStayInEditor,
+}
+
 const TOP_MENU: &[&str] = &[
     "Models",
     "Auth",
@@ -163,7 +174,9 @@ fn editor_loop(config: &mut AppConfig, target: &Path) -> std::result::Result<(),
             "Logging" => edit_logging(config)?,
             "Validate" => run_validation(config),
             "Save and Exit" => {
-                return save_and_exit(config, target);
+                if save_and_exit(config, target)? == SaveOutcome::SavedAndExit {
+                    return Ok(());
+                }
             }
             "Exit without Saving" => {
                 let confirm = Confirm::new("Discard all changes?")
@@ -888,7 +901,7 @@ fn run_validation(config: &AppConfig) {
 fn save_and_exit(
     config: &mut AppConfig,
     target: &Path,
-) -> std::result::Result<(), InquireError> {
+) -> std::result::Result<SaveOutcome, InquireError> {
     // Run validation before save
     let result = validation::validate_config(config);
     if result.has_errors() {
@@ -900,7 +913,7 @@ fn save_and_exit(
         println!();
         println!("  Fix the errors above and try again.");
         println!();
-        return Ok(());
+        return Ok(SaveOutcome::BlockedStayInEditor);
     } else if result.has_warnings() {
         println!();
         println!("  Warnings:");
@@ -918,7 +931,7 @@ fn save_and_exit(
         .prompt()?;
     if !confirm {
         println!("  Save cancelled.");
-        return Ok(());
+        return Ok(SaveOutcome::CancelledStayInEditor);
     }
 
     let yaml = generate_yaml(config);
@@ -936,7 +949,7 @@ fn save_and_exit(
     println!("    3. Validate config:  rausu check");
     println!();
 
-    Ok(())
+    Ok(SaveOutcome::SavedAndExit)
 }
 
 // ── Summary ──────────────────────────────────────────────────────────────────
@@ -1551,8 +1564,66 @@ mod tests {
             result.has_errors(),
             "static auth with no keys should produce errors"
         );
-        // The save_and_exit function now returns Ok(()) without writing
-        // when there are hard errors, instead of prompting "Save anyway?"
+    }
+
+    #[test]
+    fn test_blocked_save_returns_stay_in_editor() {
+        // When save_and_exit encounters hard validation errors it must return
+        // BlockedStayInEditor so the editor loop continues instead of exiting.
+        let mut config = AppConfig {
+            server: ServerConfig::default(),
+            logging: LoggingConfig::default(),
+            auth: AuthConfig {
+                mode: "static".to_string(),
+                keys: Vec::new(), // Error: static mode requires keys
+            },
+            models: vec![ModelConfig {
+                name: "gpt-4o".to_string(),
+                aliases: None,
+                providers: vec![ProviderDeployment {
+                    provider: "openai".to_string(),
+                    model: "gpt-4o".to_string(),
+                    api_key: Some("sk-test".to_string()),
+                    base_url: None,
+                    token_source: None,
+                    credentials_path: None,
+                    project_id: None,
+                    location: None,
+                }],
+            }],
+        };
+
+        let target = std::env::temp_dir().join(format!(
+            "rausu_blocked_save_{}.yaml",
+            std::process::id()
+        ));
+        let outcome = save_and_exit(&mut config, &target).expect("should not error");
+        assert_eq!(
+            outcome,
+            SaveOutcome::BlockedStayInEditor,
+            "blocked save must return BlockedStayInEditor, not SavedAndExit"
+        );
+        assert!(
+            !target.exists(),
+            "config file must NOT be written when validation has errors"
+        );
+    }
+
+    #[test]
+    fn test_blocked_save_does_not_exit_editor_loop_contract() {
+        // Regression: previously, editor_loop used `return save_and_exit(...)`
+        // which exited the loop even when save was blocked.
+        // This test verifies the contract: only SavedAndExit causes exit.
+        assert_ne!(
+            SaveOutcome::BlockedStayInEditor,
+            SaveOutcome::SavedAndExit,
+            "BlockedStayInEditor must be distinguishable from SavedAndExit"
+        );
+        assert_ne!(
+            SaveOutcome::CancelledStayInEditor,
+            SaveOutcome::SavedAndExit,
+            "CancelledStayInEditor must be distinguishable from SavedAndExit"
+        );
     }
 
     #[test]
