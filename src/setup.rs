@@ -102,7 +102,7 @@ fn load_or_create(target: &Path) -> Result<AppConfig> {
 
     if let Some(existing_path) = existing {
         if existing_path.exists() {
-            match AppConfig::load(existing_path.to_str().unwrap_or("")) {
+            match AppConfig::load_raw(existing_path.to_str().unwrap_or("")) {
                 Ok(cfg) => {
                     println!(
                         "  Loaded existing config from: {}",
@@ -893,15 +893,14 @@ fn save_and_exit(
     let result = validation::validate_config(config);
     if result.has_errors() {
         println!();
-        println!("  Configuration has errors:");
+        println!("  Cannot save — configuration has errors:");
         for issue in result.errors() {
             println!("    [ERROR] {}: {}", issue.context, issue.message);
         }
         println!();
-        let force_save = Confirm::new("Save anyway?").with_default(false).prompt()?;
-        if !force_save {
-            return Ok(());
-        }
+        println!("  Fix the errors above and try again.");
+        println!();
+        return Ok(());
     } else if result.has_warnings() {
         println!();
         println!("  Warnings:");
@@ -1388,6 +1387,222 @@ mod tests {
         assert!(yaml.contains("aliases:"));
         assert!(yaml.contains("- gpt-4"));
         assert!(yaml.contains("- gpt4o"));
+    }
+
+    #[test]
+    fn test_roundtrip_preserves_env_placeholder() {
+        // Simulate the full setup round-trip: load_raw → generate_yaml
+        // The ${ENV_VAR} placeholder must survive unchanged.
+        let config = AppConfig {
+            server: ServerConfig::default(),
+            logging: LoggingConfig::default(),
+            auth: AuthConfig {
+                mode: "static".to_string(),
+                keys: vec![AuthKey {
+                    name: "main".to_string(),
+                    key: "${AUTH_TOKEN}".to_string(),
+                }],
+            },
+            models: vec![ModelConfig {
+                name: "gpt-4o".to_string(),
+                aliases: None,
+                providers: vec![ProviderDeployment {
+                    provider: "openai".to_string(),
+                    model: "gpt-4o".to_string(),
+                    api_key: Some("${OPENAI_API_KEY}".to_string()),
+                    base_url: None,
+                    token_source: None,
+                    credentials_path: None,
+                    project_id: None,
+                    location: None,
+                }],
+            }],
+        };
+        let yaml = generate_yaml(&config);
+        assert!(
+            yaml.contains("api_key: \"${OPENAI_API_KEY}\""),
+            "env placeholder must survive round-trip, got:\n{yaml}"
+        );
+        assert!(
+            yaml.contains("key: \"${AUTH_TOKEN}\""),
+            "auth key placeholder must survive round-trip, got:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn test_roundtrip_placeholder_not_expanded() {
+        // Even when the env var is set, generate_yaml must emit the raw placeholder.
+        std::env::set_var("ROUNDTRIP_SECRET", "super-secret-value");
+        let config = AppConfig {
+            server: ServerConfig::default(),
+            logging: LoggingConfig::default(),
+            auth: AuthConfig::default(),
+            models: vec![ModelConfig {
+                name: "gpt-4o".to_string(),
+                aliases: None,
+                providers: vec![ProviderDeployment {
+                    provider: "openai".to_string(),
+                    model: "gpt-4o".to_string(),
+                    api_key: Some("${ROUNDTRIP_SECRET}".to_string()),
+                    base_url: None,
+                    token_source: None,
+                    credentials_path: None,
+                    project_id: None,
+                    location: None,
+                }],
+            }],
+        };
+        let yaml = generate_yaml(&config);
+        assert!(
+            !yaml.contains("super-secret-value"),
+            "expanded secret must NOT appear in output"
+        );
+        assert!(
+            yaml.contains("${ROUNDTRIP_SECRET}"),
+            "raw placeholder must appear in output"
+        );
+        std::env::remove_var("ROUNDTRIP_SECRET");
+    }
+
+    #[test]
+    fn test_roundtrip_empty_string_stays_empty() {
+        let config = AppConfig {
+            server: ServerConfig::default(),
+            logging: LoggingConfig::default(),
+            auth: AuthConfig::default(),
+            models: vec![ModelConfig {
+                name: "gpt-4o".to_string(),
+                aliases: None,
+                providers: vec![ProviderDeployment {
+                    provider: "openai".to_string(),
+                    model: "gpt-4o".to_string(),
+                    api_key: Some(String::new()),
+                    base_url: None,
+                    token_source: None,
+                    credentials_path: None,
+                    project_id: None,
+                    location: None,
+                }],
+            }],
+        };
+        let yaml = generate_yaml(&config);
+        assert!(
+            yaml.contains("api_key: \"\""),
+            "empty string must remain as empty quoted string, got:\n{yaml}"
+        );
+    }
+
+    #[test]
+    fn test_roundtrip_literal_key_stays_literal() {
+        let config = AppConfig {
+            server: ServerConfig::default(),
+            logging: LoggingConfig::default(),
+            auth: AuthConfig::default(),
+            models: vec![ModelConfig {
+                name: "gpt-4o".to_string(),
+                aliases: None,
+                providers: vec![ProviderDeployment {
+                    provider: "openai".to_string(),
+                    model: "gpt-4o".to_string(),
+                    api_key: Some("sk-literal-key-abc123".to_string()),
+                    base_url: None,
+                    token_source: None,
+                    credentials_path: None,
+                    project_id: None,
+                    location: None,
+                }],
+            }],
+        };
+        let yaml = generate_yaml(&config);
+        assert!(
+            yaml.contains("api_key: \"sk-literal-key-abc123\""),
+            "literal key must be preserved exactly"
+        );
+    }
+
+    #[test]
+    fn test_hard_validation_errors_block_save() {
+        // A config with hard validation errors: static auth with no keys
+        let config = AppConfig {
+            server: ServerConfig::default(),
+            logging: LoggingConfig::default(),
+            auth: AuthConfig {
+                mode: "static".to_string(),
+                keys: Vec::new(), // Error: static mode requires keys
+            },
+            models: vec![ModelConfig {
+                name: "gpt-4o".to_string(),
+                aliases: None,
+                providers: vec![ProviderDeployment {
+                    provider: "openai".to_string(),
+                    model: "gpt-4o".to_string(),
+                    api_key: Some("sk-test".to_string()),
+                    base_url: None,
+                    token_source: None,
+                    credentials_path: None,
+                    project_id: None,
+                    location: None,
+                }],
+            }],
+        };
+
+        let result = validation::validate_config(&config);
+        assert!(
+            result.has_errors(),
+            "static auth with no keys should produce errors"
+        );
+        // The save_and_exit function now returns Ok(()) without writing
+        // when there are hard errors, instead of prompting "Save anyway?"
+    }
+
+    #[test]
+    fn test_full_file_roundtrip_with_load_raw() {
+        // End-to-end: write YAML with placeholder → load_raw → generate_yaml → verify
+        let dir =
+            std::env::temp_dir().join(format!("rausu_setup_roundtrip_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.yaml");
+
+        let original_yaml = r#"
+models:
+  - name: gpt-4o
+    providers:
+      - provider: openai
+        model: gpt-4o
+        api_key: "${ROUNDTRIP_SECRET}"
+auth:
+  mode: static
+  keys:
+    - name: prod
+      key: "${AUTH_KEY}"
+"#;
+        std::fs::write(&path, original_yaml).unwrap();
+        std::env::set_var("ROUNDTRIP_SECRET", "super-secret-value");
+        std::env::set_var("AUTH_KEY", "auth-secret-value");
+
+        let cfg = AppConfig::load_raw(path.to_str().unwrap()).unwrap();
+        let output = generate_yaml(&cfg);
+
+        assert!(
+            output.contains("${ROUNDTRIP_SECRET}"),
+            "placeholder must survive full round-trip"
+        );
+        assert!(
+            !output.contains("super-secret-value"),
+            "expanded secret must NOT appear"
+        );
+        assert!(
+            output.contains("${AUTH_KEY}"),
+            "auth placeholder must survive"
+        );
+        assert!(
+            !output.contains("auth-secret-value"),
+            "expanded auth secret must NOT appear"
+        );
+
+        std::env::remove_var("ROUNDTRIP_SECRET");
+        std::env::remove_var("AUTH_KEY");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

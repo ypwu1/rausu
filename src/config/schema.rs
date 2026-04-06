@@ -153,6 +153,10 @@ impl AppConfig {
     ///
     /// Environment variables are prefixed with `RAUSU_` and use `__` as separator.
     /// For example, `RAUSU_SERVER__PORT=8080` overrides `server.port`.
+    ///
+    /// This method interpolates `${ENV_VAR}` placeholders in secret fields and is
+    /// intended for **runtime** use (server startup, `rausu check`).
+    /// For the interactive editor, use [`load_raw`] instead.
     pub fn load(path: &str) -> Result<Self> {
         let config = Config::builder()
             .add_source(File::with_name(path).required(false))
@@ -190,6 +194,24 @@ impl AppConfig {
                 tls.client_ca_file = Some(interpolate_env(ca));
             }
         }
+
+        Ok(app_config)
+    }
+
+    /// Load configuration from a YAML file **without** interpolating `${ENV_VAR}`
+    /// placeholders and without applying `RAUSU_*` environment overrides.
+    ///
+    /// This preserves the raw text exactly as written in the file, making it safe
+    /// for round-tripping through the interactive editor (`rausu setup`).
+    pub fn load_raw(path: &str) -> Result<Self> {
+        let config = Config::builder()
+            .add_source(File::with_name(path).required(false))
+            .build()
+            .context("Failed to build configuration")?;
+
+        let app_config: AppConfig = config
+            .try_deserialize()
+            .context("Failed to deserialise configuration")?;
 
         Ok(app_config)
     }
@@ -336,5 +358,76 @@ mod tests {
         assert_eq!(tls.key_file, "/tmp/test.key");
         std::env::remove_var("RAUSU_TEST_CERT");
         std::env::remove_var("RAUSU_TEST_KEY");
+    }
+
+    #[test]
+    fn test_load_raw_preserves_env_placeholders() {
+        let dir = std::env::temp_dir().join(format!("rausu_raw_test_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.yaml");
+
+        let yaml = r#"
+models:
+  - name: gpt-4o
+    providers:
+      - provider: openai
+        model: gpt-4o
+        api_key: "${OPENAI_API_KEY}"
+auth:
+  mode: static
+  keys:
+    - name: main
+      key: "${AUTH_SECRET}"
+server:
+  tls:
+    cert_file: "${TLS_CERT}"
+    key_file: "${TLS_KEY}"
+    client_ca_file: "${TLS_CA}"
+"#;
+        std::fs::write(&path, yaml).unwrap();
+
+        // Set env vars that would be expanded by load()
+        std::env::set_var("OPENAI_API_KEY", "sk-real-secret");
+        std::env::set_var("AUTH_SECRET", "auth-real-secret");
+        std::env::set_var("TLS_CERT", "/real/cert.pem");
+        std::env::set_var("TLS_KEY", "/real/key.pem");
+        std::env::set_var("TLS_CA", "/real/ca.pem");
+
+        let cfg = AppConfig::load_raw(path.to_str().unwrap()).unwrap();
+
+        // Placeholders must be preserved verbatim
+        assert_eq!(
+            cfg.models[0].providers[0].api_key.as_deref(),
+            Some("${OPENAI_API_KEY}")
+        );
+        assert_eq!(cfg.auth.keys[0].key, "${AUTH_SECRET}");
+        let tls = cfg.server.tls.as_ref().unwrap();
+        assert_eq!(tls.cert_file, "${TLS_CERT}");
+        assert_eq!(tls.key_file, "${TLS_KEY}");
+        assert_eq!(tls.client_ca_file.as_deref(), Some("${TLS_CA}"));
+
+        // Contrast: load() should expand them
+        let cfg_runtime = AppConfig::load(path.to_str().unwrap()).unwrap();
+        assert_eq!(
+            cfg_runtime.models[0].providers[0].api_key.as_deref(),
+            Some("sk-real-secret")
+        );
+        assert_eq!(cfg_runtime.auth.keys[0].key, "auth-real-secret");
+
+        // Cleanup
+        std::env::remove_var("OPENAI_API_KEY");
+        std::env::remove_var("AUTH_SECRET");
+        std::env::remove_var("TLS_CERT");
+        std::env::remove_var("TLS_KEY");
+        std::env::remove_var("TLS_CA");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn test_load_raw_missing_config_uses_defaults() {
+        let cfg = AppConfig::load_raw("nonexistent_raw_test.yaml").unwrap();
+        assert_eq!(cfg.server.host, "0.0.0.0");
+        assert_eq!(cfg.server.port, 4000);
+        assert!(cfg.models.is_empty());
     }
 }
