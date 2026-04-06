@@ -75,10 +75,7 @@ pub async fn run_check(cli_config: Option<&str>) -> Result<()> {
                 bold = c.bold,
                 reset = c.reset
             );
-            println!(
-                "   Server: {}:{}",
-                cfg.server.host, cfg.server.port
-            );
+            println!("   Server: {}:{}", cfg.server.host, cfg.server.port);
             println!("   Auth: {}", auth_display(&cfg, &c));
             println!();
             cfg
@@ -160,7 +157,8 @@ pub async fn run_check(cli_config: Option<&str>) -> Result<()> {
             };
             println!(
                 "   {color}{icon}{reset} {}: {}",
-                issue.context, issue.message,
+                issue.context,
+                issue.message,
                 color = color,
                 reset = c.reset,
             );
@@ -188,7 +186,7 @@ pub async fn run_check(cli_config: Option<&str>) -> Result<()> {
 
     for model in &app_config.models {
         let provider_names: Vec<String> =
-            model.providers.iter().map(|d| provider_short_label(d)).collect();
+            model.providers.iter().map(provider_short_label).collect();
         let providers_str = provider_names.join(", ");
 
         let aliases = model
