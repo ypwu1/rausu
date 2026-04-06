@@ -9,7 +9,7 @@
   <a href="./README_CN.md">中文版</a>
 </p>
 
-A high-performance LLM API Gateway written in Rust — a drop-in replacement for [LiteLLM Proxy](https://github.com/BerriAI/litellm) with better performance, smaller footprint, and simpler deployment (single binary).
+A high-performance LLM API gateway written in Rust. Single binary, zero runtime dependencies, protocol-aware routing across multiple LLM providers.
 
 ## Features
 

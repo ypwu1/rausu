@@ -9,7 +9,7 @@
   <a href="./README.md">English Version</a>
 </p>
 
-一个用 Rust 编写的高性能 LLM API 网关——作为 [LiteLLM Proxy](https://github.com/BerriAI/litellm) 的替代方案，在性能、内存占用和部署便捷性上全面超越（单一二进制文件）。
+一个用 Rust 编写的高性能 LLM API 网关。单一二进制文件，零运行时依赖，协议感知的多 Provider 路由。
 
 ## 特性
 
