@@ -60,11 +60,7 @@ fn provider_model_suggestions(provider: &str) -> Vec<&'static str> {
         "chatgpt-subscription" => vec!["gpt-5", "gpt-4o", "o3", "o4-mini"],
         "claude-subscription" => vec!["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
         "openai" => vec!["gpt-4o", "gpt-4o-mini", "o3", "o4-mini"],
-        "anthropic" => vec![
-            "claude-opus-4-6",
-            "claude-sonnet-4-6",
-            "claude-haiku-4-5",
-        ],
+        "anthropic" => vec!["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
         "vertex-ai" => vec!["gemini-2.5-pro", "gemini-2.5-flash"],
         _ => vec![],
     }
@@ -104,10 +100,7 @@ fn load_or_create(target: &Path) -> Result<AppConfig> {
         if existing_path.exists() {
             match AppConfig::load_raw(existing_path.to_str().unwrap_or("")) {
                 Ok(cfg) => {
-                    println!(
-                        "  Loaded existing config from: {}",
-                        existing_path.display()
-                    );
+                    println!("  Loaded existing config from: {}", existing_path.display());
                     println!(
                         "  ({} models, {} auth keys)",
                         cfg.models.len(),
@@ -292,10 +285,7 @@ fn create_model() -> std::result::Result<Option<ModelConfig>, InquireError> {
     }))
 }
 
-fn edit_single_model(
-    config: &mut AppConfig,
-    idx: usize,
-) -> std::result::Result<(), InquireError> {
+fn edit_single_model(config: &mut AppConfig, idx: usize) -> std::result::Result<(), InquireError> {
     loop {
         let model = &config.models[idx];
         let mut choices = vec![
@@ -363,12 +353,9 @@ fn edit_single_model(
         } else if choice == "Reorder providers" {
             reorder_providers(&mut config.models[idx])?;
         } else if choice == "Delete this model" {
-            let confirm = Confirm::new(&format!(
-                "Delete model '{}'?",
-                config.models[idx].name
-            ))
-            .with_default(false)
-            .prompt()?;
+            let confirm = Confirm::new(&format!("Delete model '{}'?", config.models[idx].name))
+                .with_default(false)
+                .prompt()?;
             if confirm {
                 config.models.remove(idx);
                 return Ok(());
@@ -681,8 +668,7 @@ fn edit_auth(config: &mut AppConfig) -> std::result::Result<(), InquireError> {
         if choice == "< Back" {
             return Ok(());
         } else if choice == mode_label {
-            let new_mode =
-                Select::new("Auth mode:", vec!["disabled", "static"]).prompt()?;
+            let new_mode = Select::new("Auth mode:", vec!["disabled", "static"]).prompt()?;
             config.auth.mode = new_mode.to_string();
         } else if choice == "+ Add key" {
             let name = Text::new("Key name:").with_default("default").prompt()?;
@@ -842,10 +828,7 @@ fn edit_tls(config: &mut AppConfig) -> std::result::Result<(), InquireError> {
 fn edit_logging(config: &mut AppConfig) -> std::result::Result<(), InquireError> {
     let current_level = config.logging.level.as_deref().unwrap_or("info");
     let levels = vec!["trace", "debug", "info", "warn", "error"];
-    let cursor = levels
-        .iter()
-        .position(|&l| l == current_level)
-        .unwrap_or(2);
+    let cursor = levels.iter().position(|&l| l == current_level).unwrap_or(2);
     let level = Select::new("Log level:", levels)
         .with_starting_cursor(cursor)
         .prompt()?;
@@ -889,10 +872,7 @@ fn run_validation(config: &AppConfig) {
     let error_count = result.errors().len();
     let warn_count = result.warnings().len();
     println!();
-    println!(
-        "  {} error(s), {} warning(s)",
-        error_count, warn_count
-    );
+    println!("  {} error(s), {} warning(s)", error_count, warn_count);
     println!();
 }
 
@@ -1593,10 +1573,8 @@ mod tests {
             }],
         };
 
-        let target = std::env::temp_dir().join(format!(
-            "rausu_blocked_save_{}.yaml",
-            std::process::id()
-        ));
+        let target =
+            std::env::temp_dir().join(format!("rausu_blocked_save_{}.yaml", std::process::id()));
         let outcome = save_and_exit(&mut config, &target).expect("should not error");
         assert_eq!(
             outcome,

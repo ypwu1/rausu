@@ -652,7 +652,11 @@ mod tests {
 
     // ── OpenAI base_url grouping tests ──────────────────────────────────────
 
-    fn openai_deployment_with_url(model: &str, api_key: &str, base_url: Option<&str>) -> ProviderDeployment {
+    fn openai_deployment_with_url(
+        model: &str,
+        api_key: &str,
+        base_url: Option<&str>,
+    ) -> ProviderDeployment {
         ProviderDeployment {
             provider: "openai".to_string(),
             model: model.to_string(),
@@ -688,10 +692,7 @@ mod tests {
         let (providers, registry) = build_providers(&config).await;
 
         // Should have 2 separate OpenAI provider instances
-        let openai_providers: Vec<_> = providers
-            .iter()
-            .filter(|p| p.name() == "openai")
-            .collect();
+        let openai_providers: Vec<_> = providers.iter().filter(|p| p.name() == "openai").collect();
         assert_eq!(
             openai_providers.len(),
             2,
@@ -721,10 +722,7 @@ mod tests {
 
         let (providers, _) = build_providers(&config).await;
 
-        let openai_providers: Vec<_> = providers
-            .iter()
-            .filter(|p| p.name() == "openai")
-            .collect();
+        let openai_providers: Vec<_> = providers.iter().filter(|p| p.name() == "openai").collect();
         assert_eq!(
             openai_providers.len(),
             1,
@@ -754,10 +752,7 @@ mod tests {
 
         let (providers, _) = build_providers(&config).await;
 
-        let openai_providers: Vec<_> = providers
-            .iter()
-            .filter(|p| p.name() == "openai")
-            .collect();
+        let openai_providers: Vec<_> = providers.iter().filter(|p| p.name() == "openai").collect();
         assert_eq!(
             openai_providers.len(),
             2,
