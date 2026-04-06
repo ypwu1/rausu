@@ -78,30 +78,25 @@ mod tests {
     use tempfile::NamedTempFile;
 
     /// Helper: generate a self-signed CA + server cert using rcgen.
-    fn generate_test_certs() -> (rcgen::CertifiedKey, rcgen::CertifiedKey) {
-        use rcgen::{CertificateParams, KeyPair};
+    ///
+    /// Returns (ca_cert_pem, server_cert_pem, server_key_pem).
+    fn generate_test_certs() -> (String, String, String) {
+        use rcgen::{CertificateParams, Issuer, KeyPair};
 
         // CA
         let ca_key = KeyPair::generate().unwrap();
         let mut ca_params = CertificateParams::new(vec!["Test CA".to_string()]).unwrap();
         ca_params.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Unconstrained);
-        let ca = ca_params.self_signed(&ca_key).unwrap();
+        let ca_cert = ca_params.self_signed(&ca_key).unwrap();
+        let ca_cert_pem = ca_cert.pem();
+        let ca_issuer = Issuer::new(ca_params, ca_key);
 
         // Server cert signed by CA
         let server_key = KeyPair::generate().unwrap();
         let server_params = CertificateParams::new(vec!["localhost".to_string()]).unwrap();
-        let server_cert = server_params.signed_by(&server_key, &ca, &ca_key).unwrap();
+        let server_cert = server_params.signed_by(&server_key, &ca_issuer).unwrap();
 
-        (
-            rcgen::CertifiedKey {
-                cert: ca,
-                key_pair: ca_key,
-            },
-            rcgen::CertifiedKey {
-                cert: server_cert,
-                key_pair: server_key,
-            },
-        )
+        (ca_cert_pem, server_cert.pem(), server_key.serialize_pem())
     }
 
     fn write_temp_pem(content: &str) -> NamedTempFile {
@@ -113,9 +108,9 @@ mod tests {
 
     #[test]
     fn test_build_tls_only() {
-        let (_, server) = generate_test_certs();
-        let cert_file = write_temp_pem(&server.cert.pem());
-        let key_file = write_temp_pem(&server.key_pair.serialize_pem());
+        let (_, server_cert_pem, server_key_pem) = generate_test_certs();
+        let cert_file = write_temp_pem(&server_cert_pem);
+        let key_file = write_temp_pem(&server_key_pem);
 
         let tls_config = TlsConfig {
             cert_file: cert_file.path().to_str().unwrap().to_string(),
@@ -129,10 +124,10 @@ mod tests {
 
     #[test]
     fn test_build_mtls() {
-        let (ca, server) = generate_test_certs();
-        let cert_file = write_temp_pem(&server.cert.pem());
-        let key_file = write_temp_pem(&server.key_pair.serialize_pem());
-        let ca_file = write_temp_pem(&ca.cert.pem());
+        let (ca_cert_pem, server_cert_pem, server_key_pem) = generate_test_certs();
+        let cert_file = write_temp_pem(&server_cert_pem);
+        let key_file = write_temp_pem(&server_key_pem);
+        let ca_file = write_temp_pem(&ca_cert_pem);
 
         let tls_config = TlsConfig {
             cert_file: cert_file.path().to_str().unwrap().to_string(),
@@ -187,9 +182,9 @@ mod tests {
 
     #[test]
     fn test_missing_client_ca_file() {
-        let (_, server) = generate_test_certs();
-        let cert_file = write_temp_pem(&server.cert.pem());
-        let key_file = write_temp_pem(&server.key_pair.serialize_pem());
+        let (_, server_cert_pem, server_key_pem) = generate_test_certs();
+        let cert_file = write_temp_pem(&server_cert_pem);
+        let key_file = write_temp_pem(&server_key_pem);
 
         let tls_config = TlsConfig {
             cert_file: cert_file.path().to_str().unwrap().to_string(),
