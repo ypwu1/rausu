@@ -301,25 +301,43 @@ models:
 
 ## 认证
 
-将 Rausu 暴露到网络时（例如 `host: 0.0.0.0`），可启用 API Key 认证以防止未授权访问。
+Rausu 有两种认证模式，控制**客户端是否需要向 Rausu 本身进行身份验证**（这与 Rausu 自动注入的上游 Provider 凭证是分开的）：
 
-### 配置
+| 模式 | 使用场景 | 客户端 API Key 要求 |
+|------|----------|---------------------|
+| `disabled`（默认） | 仅本地代理（`host: 127.0.0.1`） | 任意非空占位值（如 `fake`、`local-proxy`）。Rausu 完全忽略。 |
+| `static` | 暴露到网络的网关（`host: 0.0.0.0`） | 必须是 `auth.keys[]` 中配置的有效 Key。以 `Authorization: Bearer <key>` 方式发送。 |
+
+### `mode: disabled`（默认 — 本地代理）
+
+省略 `auth` 或设为 `mode: disabled` 时，Rausu 完全不验证客户端发送的 API Key。客户端仍需设置非空 Key（大多数 SDK 有此要求），但值可以是任意内容——`fake`、`not-used`、`local-proxy` 等。
+
+这是在 `127.0.0.1` 上进行单用户本地代理使用时的推荐模式。
+
+### `mode: static`（网络网关）
+
+设为 `mode: static` 时，Rausu 要求客户端发送有效的 `Authorization: Bearer <key>` 头，Key 必须与配置列表中的某个匹配。缺少或无效的 Key 将收到 `401 Unauthorized` 响应。
 
 ```yaml
 auth:
-  mode: static          # disabled（默认）| static
+  mode: static
   keys:
     - name: "my-laptop"
       key: "rausu-sk-abc123"
-    - name: "remote-client"
-      key: "${RAUSU_API_KEY}"    # 支持环境变量插值
+    - name: "ci-server"
+      key: "${RAUSU_API_KEY}"    # 环境变量插值——启动时解析
 ```
 
-如果省略 `auth` 或设为 `mode: disabled`，则不需要认证（适用于 `127.0.0.1` 仅本地使用）。
+Key 值支持 **`${ENV_VAR}` 插值**：Rausu 在加载配置时将 `${RAUSU_API_KEY}` 等占位符从进程环境变量中展开。这样可以避免将密钥明文写入配置文件。
 
-### 客户端使用
+```bash
+# 示例：Key 存储在环境变量中
+export RAUSU_API_KEY="rausu-sk-prod-secret"
+./target/release/rausu --config config.yaml
+# 启动时，${RAUSU_API_KEY} 被解析为 "rausu-sk-prod-secret"
+```
 
-当 `mode: static` 时，客户端必须在请求中以 Bearer Token 方式发送有效的 Key：
+### 使用静态认证的客户端配置
 
 ```bash
 export OPENAI_API_KEY="rausu-sk-abc123"    # 必须与配置中的某个 key 匹配
@@ -327,7 +345,7 @@ export OPENAI_BASE_URL="http://your-server:4000/v1"
 codex --model gpt-5.3-codex
 ```
 
-`/health` 端点始终无需认证即可访问。
+无论认证模式如何，`/health` 端点始终无需认证即可访问。
 
 **Key 前缀约定：** `rausu-sk-<random>`（推荐但不强制）。
 
@@ -335,7 +353,9 @@ codex --model gpt-5.3-codex
 
 ## 伪 Key / 本地认证行为
 
-**Rausu 会忽略本地客户端传入的 API Key。** 本地工具（Codex CLI、Claude Code、curl、SDK 等）通常要求 API Key 字段不为空，但在本地代理模式下，你设置什么值并不重要——Rausu 不会校验它。
+> **本节适用于 `auth.mode` 为 `disabled`（默认值）的情况。** 如果你启用了 `mode: static`，客户端必须发送有效的已配置 Key——参见上方[认证](#认证)章节。
+
+**Rausu 会忽略本地客户端传入的 API Key。** 本地工具（Codex CLI、Claude Code、curl、SDK 等）通常要求 API Key 字段不为空，但在本地代理模式（`auth.mode: disabled`）下，你设置什么值并不重要——Rausu 不会校验它。
 
 Rausu 会**注入自身配置中加载的真实上游凭证**（通过环境变量获取的 API Key，或从凭证文件/环境变量获取的 OAuth Token）。
 

@@ -209,4 +209,92 @@ mod tests {
 
         assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
     }
+
+    #[tokio::test]
+    async fn test_static_multiple_keys_any_valid() {
+        let auth = AuthState::from_keys(vec![
+            "rausu-sk-key1".to_string(),
+            "rausu-sk-key2".to_string(),
+        ]);
+        let app = test_router(auth);
+
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("authorization", "Bearer rausu-sk-key2")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_root_exempt_in_static_mode() {
+        let auth = AuthState::from_keys(vec!["rausu-sk-abc123".to_string()]);
+        let router = Router::new()
+            .route("/", get(|| async { "root" }))
+            .route("/health", get(|| async { "ok" }))
+            .route("/v1/models", get(|| async { "models" }))
+            .route_layer(middleware::from_fn_with_state(
+                auth.clone(),
+                auth_middleware,
+            ))
+            .with_state(auth);
+
+        let resp = router
+            .oneshot(
+                HttpRequest::builder()
+                    .method("GET")
+                    .uri("/")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_static_rejects_empty_bearer() {
+        let auth = AuthState::from_keys(vec!["rausu-sk-abc123".to_string()]);
+        let app = test_router(auth);
+
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("authorization", "Bearer ")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[tokio::test]
+    async fn test_disabled_passes_models_endpoint() {
+        let app = test_router(AuthState::disabled());
+
+        let resp = app
+            .oneshot(
+                HttpRequest::builder()
+                    .method("GET")
+                    .uri("/v1/models")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
 }

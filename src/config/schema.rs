@@ -430,4 +430,59 @@ server:
         assert_eq!(cfg.server.port, 4000);
         assert!(cfg.models.is_empty());
     }
+
+    #[test]
+    fn test_interpolate_env_unset_var_returns_empty() {
+        std::env::remove_var("RAUSU_DEFINITELY_UNSET_VAR");
+        assert_eq!(
+            interpolate_env("prefix_${RAUSU_DEFINITELY_UNSET_VAR}_suffix"),
+            "prefix__suffix"
+        );
+    }
+
+    #[test]
+    fn test_interpolate_env_multiple_vars() {
+        std::env::set_var("RAUSU_TEST_A", "hello");
+        std::env::set_var("RAUSU_TEST_B", "world");
+        assert_eq!(
+            interpolate_env("${RAUSU_TEST_A}-${RAUSU_TEST_B}"),
+            "hello-world"
+        );
+        std::env::remove_var("RAUSU_TEST_A");
+        std::env::remove_var("RAUSU_TEST_B");
+    }
+
+    #[test]
+    fn test_auth_key_env_interpolation_via_load() {
+        let dir = std::env::temp_dir().join(format!("rausu_auth_load_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("config.yaml");
+
+        let yaml = r#"
+auth:
+  mode: static
+  keys:
+    - name: env-key
+      key: "${RAUSU_TEST_LOAD_AUTH_KEY}"
+    - name: literal-key
+      key: "rausu-sk-hardcoded"
+"#;
+        std::fs::write(&path, yaml).unwrap();
+
+        std::env::set_var("RAUSU_TEST_LOAD_AUTH_KEY", "rausu-sk-from-env");
+
+        let cfg = AppConfig::load(path.to_str().unwrap()).unwrap();
+        assert_eq!(cfg.auth.mode, "static");
+        assert_eq!(cfg.auth.keys.len(), 2);
+        assert_eq!(cfg.auth.keys[0].key, "rausu-sk-from-env");
+        assert_eq!(cfg.auth.keys[1].key, "rausu-sk-hardcoded");
+
+        // Raw load must preserve the placeholder
+        let raw = AppConfig::load_raw(path.to_str().unwrap()).unwrap();
+        assert_eq!(raw.auth.keys[0].key, "${RAUSU_TEST_LOAD_AUTH_KEY}");
+        assert_eq!(raw.auth.keys[1].key, "rausu-sk-hardcoded");
+
+        std::env::remove_var("RAUSU_TEST_LOAD_AUTH_KEY");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

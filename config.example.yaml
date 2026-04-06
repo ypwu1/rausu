@@ -12,6 +12,21 @@ logging:
   level: info        # trace | debug | info | warn | error
   format: pretty     # json (structured) | pretty (human-readable)
 
+# ── Authentication ─────────────────────────────────────────────────────────────
+# mode: disabled (default) — no auth, suitable for local-only (127.0.0.1) use.
+# mode: static           — clients must send Authorization: Bearer <key>.
+#
+# Uncomment the block below to enable static auth (recommended when host is 0.0.0.0).
+# Key values support ${ENV_VAR} interpolation.
+#
+# auth:
+#   mode: static
+#   keys:
+#     - name: "my-laptop"
+#       key: "rausu-sk-abc123"
+#     - name: "ci-server"
+#       key: "${RAUSU_API_KEY}"
+
 models:
   # ── OpenAI (API key) ────────────────────────────────────────────────────────
   - name: gpt-4o

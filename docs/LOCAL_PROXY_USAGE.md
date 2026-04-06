@@ -303,25 +303,43 @@ models:
 
 ## Authentication
 
-When exposing Rausu on the network (e.g., `host: 0.0.0.0`), you can enable API key authentication to prevent unauthorized access.
+Rausu has two authentication modes that control whether **clients must authenticate to Rausu itself** (this is separate from the upstream provider credentials that Rausu injects automatically):
 
-### Config
+| Mode | When to use | Client API key requirement |
+|------|-------------|---------------------------|
+| `disabled` (default) | Local-only proxy (`host: 127.0.0.1`) | Any non-empty placeholder value (e.g., `fake`, `local-proxy`). Rausu ignores it entirely. |
+| `static` | Network-exposed gateway (`host: 0.0.0.0`) | Must be a valid key from `auth.keys[]`. Sent as `Authorization: Bearer <key>`. |
+
+### `mode: disabled` (default — local proxy)
+
+When `auth` is omitted or set to `mode: disabled`, Rausu does not validate the client-provided API key at all. Clients still need to set a non-empty key (most SDKs require it), but the value can be anything — `fake`, `not-used`, `local-proxy`, etc.
+
+This is the recommended mode for single-user local proxy usage on `127.0.0.1`.
+
+### `mode: static` (network gateway)
+
+When `mode: static`, Rausu requires clients to send a valid `Authorization: Bearer <key>` header matching one of the configured keys. Requests with missing or invalid keys receive a `401 Unauthorized` response.
 
 ```yaml
 auth:
-  mode: static          # disabled (default) | static
+  mode: static
   keys:
     - name: "my-laptop"
       key: "rausu-sk-abc123"
-    - name: "remote-client"
-      key: "${RAUSU_API_KEY}"    # supports env var interpolation
+    - name: "ci-server"
+      key: "${RAUSU_API_KEY}"    # env var interpolation — resolved at startup
 ```
 
-If `auth` is omitted or `mode: disabled`, no authentication is required (suitable for `127.0.0.1` local-only use).
+Key values support **`${ENV_VAR}` interpolation**: Rausu expands placeholders like `${RAUSU_API_KEY}` from the process environment at config load time. This keeps secrets out of the config file.
 
-### Client usage
+```bash
+# Example: key stored in environment
+export RAUSU_API_KEY="rausu-sk-prod-secret"
+./target/release/rausu --config config.yaml
+# At startup, ${RAUSU_API_KEY} is resolved to "rausu-sk-prod-secret"
+```
 
-When `mode: static`, clients must send a valid key as a Bearer token:
+### Client usage with static auth
 
 ```bash
 export OPENAI_API_KEY="rausu-sk-abc123"    # must match a configured key
@@ -329,7 +347,7 @@ export OPENAI_BASE_URL="http://your-server:4000/v1"
 codex --model gpt-5.3-codex
 ```
 
-The `/health` endpoint is always accessible without authentication.
+The `/health` endpoint is always accessible without authentication, regardless of auth mode.
 
 **Key prefix convention:** `rausu-sk-<random>` (recommended, not enforced).
 
@@ -337,7 +355,9 @@ The `/health` endpoint is always accessible without authentication.
 
 ## Fake-Key / Local Auth Behavior
 
-**Rausu ignores the API key sent by local clients.** Local tools (Codex CLI, Claude Code, curl, SDKs) typically require an API key field to be non-empty, but in local proxy mode it does not matter what value you set — Rausu does not validate it.
+> **This section applies when `auth.mode` is `disabled` (the default).** If you have enabled `mode: static`, clients must send a valid configured key instead — see [Authentication](#authentication) above.
+
+**Rausu ignores the API key sent by local clients.** Local tools (Codex CLI, Claude Code, curl, SDKs) typically require an API key field to be non-empty, but in local proxy mode (`auth.mode: disabled`) it does not matter what value you set — Rausu does not validate it.
 
 Instead, Rausu **injects the real upstream credentials** it loads from its own config (API keys via environment variables, OAuth tokens via credentials files or environment variables).
 
