@@ -75,6 +75,19 @@ rausu init --path ./my.yaml   # write to a custom path
 rausu init --force            # overwrite an existing file
 ```
 
+### `rausu setup`
+
+Interactive config editor — create or edit configs without writing YAML by hand:
+
+```bash
+rausu setup                    # create or edit at default location
+rausu setup --path ./my.yaml   # target a specific file
+```
+
+The editor is model-centric: you create a virtual model first, then attach provider deployments with failover ordering. It supports adding, editing, deleting, and reordering both models and providers. Existing configs are loaded automatically.
+
+Pre-save validation checks for errors (unknown providers, missing fields, duplicates) and warnings (missing credentials, unreachable endpoints). See [docs/SETUP_EDITOR.md](docs/SETUP_EDITOR.md) for details.
+
 ### `rausu check`
 
 Validate your configuration and test provider connectivity:
@@ -106,6 +119,8 @@ Example output:
 ```
 
 The check runs four steps: config loading, model validation (required fields, valid provider types), provider connectivity (HTTP reachability or credential file existence), and auth verification.
+
+> **Startup validation**: the same validation logic runs automatically when `rausu` starts in server mode. Hard errors (unknown providers, missing required fields, duplicate names) block startup. Warnings (missing credentials, unreachable endpoints) are logged but allow the server to proceed.
 
 ### Manual setup
 

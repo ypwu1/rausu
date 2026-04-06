@@ -218,7 +218,7 @@ async fn build_providers(
     let mut model_registry: HashMap<String, Vec<(String, String)>> = HashMap::new();
 
     // Collect model names per provider type
-    let mut openai_models: Vec<(String, String, String)> = Vec::new(); // (virtual, api_key, model)
+    let mut openai_models: Vec<(String, String, String, Option<String>)> = Vec::new(); // (virtual, api_key, model, base_url)
     let mut anthropic_models: Vec<(String, String, String)> = Vec::new();
     // (virtual_name, provider_model, token_source_str, credentials_path)
     let mut claude_sub_models: Vec<(String, String, String, Option<String>)> = Vec::new();
@@ -234,7 +234,12 @@ async fn build_providers(
             let api_key = deployment.api_key.clone().unwrap_or_default();
             let registry_entry: Option<(String, String)> = match deployment.provider.as_str() {
                 "openai" => {
-                    openai_models.push((model_cfg.name.clone(), api_key, deployment.model.clone()));
+                    openai_models.push((
+                        model_cfg.name.clone(),
+                        api_key,
+                        deployment.model.clone(),
+                        deployment.base_url.clone(),
+                    ));
                     Some(("openai".to_string(), deployment.model.clone()))
                 }
                 "anthropic" => {
@@ -321,17 +326,26 @@ async fn build_providers(
         }
     }
 
-    // Create one OpenAI provider (reuse client, first api_key wins per model)
+    // Create one OpenAI provider per unique (api_key, base_url) pair.
+    // This ensures DeepSeek, Ollama, and custom OpenAI-compatible providers
+    // each get their own correctly-configured provider instance.
     if !openai_models.is_empty() {
-        // Group by api_key — for MVP, create one provider per unique api_key
-        let mut by_key: std::collections::HashMap<String, (Vec<String>, Option<String>)> =
+        let mut by_key: std::collections::HashMap<(String, String), Vec<String>> =
             std::collections::HashMap::new();
-        for (virtual_name, api_key, _model) in &openai_models {
-            let entry = by_key.entry(api_key.clone()).or_insert((Vec::new(), None));
-            entry.0.push(virtual_name.clone());
+        for (virtual_name, api_key, _model, base_url) in &openai_models {
+            let url_key = base_url.clone().unwrap_or_default();
+            by_key
+                .entry((api_key.clone(), url_key))
+                .or_default()
+                .push(virtual_name.clone());
         }
 
-        for (api_key, (model_names, base_url)) in by_key {
+        for ((api_key, url_key), model_names) in by_key {
+            let base_url = if url_key.is_empty() {
+                None
+            } else {
+                Some(url_key)
+            };
             providers.push(Box::new(OpenAiProvider::new(
                 api_key,
                 base_url,
@@ -634,5 +648,120 @@ mod tests {
         let alias = registry.get("sonnet").expect("alias missing");
         assert_eq!(primary, alias);
         assert_eq!(primary.len(), 2);
+    }
+
+    // ── OpenAI base_url grouping tests ──────────────────────────────────────
+
+    fn openai_deployment_with_url(model: &str, api_key: &str, base_url: Option<&str>) -> ProviderDeployment {
+        ProviderDeployment {
+            provider: "openai".to_string(),
+            model: model.to_string(),
+            api_key: Some(api_key.to_string()),
+            base_url: base_url.map(|s| s.to_string()),
+            token_source: None,
+            credentials_path: None,
+            project_id: None,
+            location: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_openai_different_base_urls_create_separate_providers() {
+        // DeepSeek and default OpenAI should get separate provider instances
+        let config = minimal_config(vec![
+            ModelConfig {
+                name: "gpt-4o".to_string(),
+                aliases: None,
+                providers: vec![openai_deployment_with_url("gpt-4o", "sk-openai", None)],
+            },
+            ModelConfig {
+                name: "deepseek-chat".to_string(),
+                aliases: None,
+                providers: vec![openai_deployment_with_url(
+                    "deepseek-chat",
+                    "sk-deep",
+                    Some("https://api.deepseek.com/v1"),
+                )],
+            },
+        ]);
+
+        let (providers, registry) = build_providers(&config).await;
+
+        // Should have 2 separate OpenAI provider instances
+        let openai_providers: Vec<_> = providers
+            .iter()
+            .filter(|p| p.name() == "openai")
+            .collect();
+        assert_eq!(
+            openai_providers.len(),
+            2,
+            "Different base_urls should create separate providers"
+        );
+
+        // Both models should be in the registry
+        assert!(registry.contains_key("gpt-4o"));
+        assert!(registry.contains_key("deepseek-chat"));
+    }
+
+    #[tokio::test]
+    async fn test_openai_same_key_same_url_grouped() {
+        // Two models with the same api_key and no base_url should share a provider
+        let config = minimal_config(vec![
+            ModelConfig {
+                name: "gpt-4o".to_string(),
+                aliases: None,
+                providers: vec![openai_deployment_with_url("gpt-4o", "sk-shared", None)],
+            },
+            ModelConfig {
+                name: "gpt-4o-mini".to_string(),
+                aliases: None,
+                providers: vec![openai_deployment_with_url("gpt-4o-mini", "sk-shared", None)],
+            },
+        ]);
+
+        let (providers, _) = build_providers(&config).await;
+
+        let openai_providers: Vec<_> = providers
+            .iter()
+            .filter(|p| p.name() == "openai")
+            .collect();
+        assert_eq!(
+            openai_providers.len(),
+            1,
+            "Same api_key and base_url should share a provider"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_openai_same_key_different_url_separated() {
+        // Same key but different base_urls should be separate
+        let config = minimal_config(vec![
+            ModelConfig {
+                name: "model-a".to_string(),
+                aliases: None,
+                providers: vec![openai_deployment_with_url("model-a", "sk-key", None)],
+            },
+            ModelConfig {
+                name: "model-b".to_string(),
+                aliases: None,
+                providers: vec![openai_deployment_with_url(
+                    "model-b",
+                    "sk-key",
+                    Some("http://localhost:11434/v1"),
+                )],
+            },
+        ]);
+
+        let (providers, _) = build_providers(&config).await;
+
+        let openai_providers: Vec<_> = providers
+            .iter()
+            .filter(|p| p.name() == "openai")
+            .collect();
+        assert_eq!(
+            openai_providers.len(),
+            2,
+            "Same key but different base_url should create separate providers"
+        );
     }
 }

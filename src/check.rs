@@ -1,4 +1,7 @@
 //! `rausu check` subcommand — config validation and provider connectivity testing.
+//!
+//! Uses the shared validation module for config checks, then performs
+//! provider-specific connectivity tests.
 
 use anyhow::{Context, Result};
 use std::io::IsTerminal;
@@ -6,18 +9,9 @@ use std::path::PathBuf;
 
 use crate::config::{
     paths::resolve_config_path,
-    schema::{AppConfig, ModelConfig, ProviderDeployment},
+    schema::{AppConfig, ProviderDeployment},
 };
-
-/// Known provider types.
-const VALID_PROVIDERS: &[&str] = &[
-    "openai",
-    "anthropic",
-    "claude-subscription",
-    "chatgpt-subscription",
-    "github-copilot",
-    "vertex-ai",
-];
+use crate::validation::{self, Severity};
 
 /// ANSI color helpers — return empty strings when not a TTY.
 struct Colors {
@@ -83,8 +77,7 @@ pub async fn run_check(cli_config: Option<&str>) -> Result<()> {
             );
             println!(
                 "   Server: {}:{}",
-                app_config_server_display(&cfg),
-                cfg.server.port
+                cfg.server.host, cfg.server.port
             );
             println!("   Auth: {}", auth_display(&cfg, &c));
             println!();
@@ -149,7 +142,33 @@ pub async fn run_check(cli_config: Option<&str>) -> Result<()> {
         println!();
     }
 
-    // ── Step 2: Model Validation ────────────────────────────────────────────
+    // ── Step 2: Shared Config Validation ────────────────────────────────────
+    let validation_result = validation::validate_config(&app_config);
+    if !validation_result.issues.is_empty() {
+        println!(
+            "\u{1f50d} {bold}Validation:{reset}",
+            bold = c.bold,
+            reset = c.reset
+        );
+        for issue in &validation_result.issues {
+            let (icon, color) = match issue.severity {
+                Severity::Error => {
+                    all_ok = false;
+                    ("\u{2717}", c.red)
+                }
+                Severity::Warning => ("\u{26a0}", c.yellow),
+            };
+            println!(
+                "   {color}{icon}{reset} {}: {}",
+                issue.context, issue.message,
+                color = color,
+                reset = c.reset,
+            );
+        }
+        println!();
+    }
+
+    // ── Step 3: Model Summary ──────────────────────────────────────────────
     let model_count = app_config.models.len();
     println!(
         "\u{1f4e6} {bold}Models ({model_count}):{reset}",
@@ -165,23 +184,43 @@ pub async fn run_check(cli_config: Option<&str>) -> Result<()> {
             yellow = c.yellow,
             reset = c.reset
         );
-        all_ok = false;
     }
 
     for model in &app_config.models {
-        let (ok, endpoints) = validate_model(model, &c);
-        if !ok {
-            all_ok = false;
-        }
-        for ep in endpoints {
-            if !provider_endpoints.iter().any(|e| e.key == ep.key) {
-                provider_endpoints.push(ep);
+        let provider_names: Vec<String> =
+            model.providers.iter().map(|d| provider_short_label(d)).collect();
+        let providers_str = provider_names.join(", ");
+
+        let aliases = model
+            .aliases
+            .as_ref()
+            .map(|a| a.join(", "))
+            .unwrap_or_default();
+        let alias_str = if aliases.is_empty() {
+            String::new()
+        } else {
+            format!(" (aliases: {aliases})")
+        };
+
+        println!(
+            "   {green}\u{2713}{reset} {name}{alias_str} \u{2192} {providers_str}",
+            green = c.green,
+            reset = c.reset,
+            name = model.name,
+        );
+
+        // Collect endpoints for connectivity testing
+        for deployment in &model.providers {
+            if let Some(ep) = build_endpoint(deployment) {
+                if !provider_endpoints.iter().any(|e| e.key == ep.key) {
+                    provider_endpoints.push(ep);
+                }
             }
         }
     }
     println!();
 
-    // ── Step 3: Provider Connectivity ───────────────────────────────────────
+    // ── Step 4: Provider Connectivity ───────────────────────────────────────
     println!(
         "\u{1f50c} {bold}Connectivity:{reset}",
         bold = c.bold,
@@ -218,16 +257,6 @@ pub async fn run_check(cli_config: Option<&str>) -> Result<()> {
     }
     println!();
 
-    // ── Step 4: Auth Check ──────────────────────────────────────────────────
-    if app_config.auth.mode == "static" && app_config.auth.keys.is_empty() {
-        println!(
-            "{red}\u{2717} Auth mode is 'static' but no keys are configured{reset}",
-            red = c.red,
-            reset = c.reset
-        );
-        all_ok = false;
-    }
-
     // ── Summary ─────────────────────────────────────────────────────────────
     if total_count > 0 {
         if all_ok {
@@ -246,10 +275,6 @@ pub async fn run_check(cli_config: Option<&str>) -> Result<()> {
     }
 
     Ok(())
-}
-
-fn app_config_server_display(cfg: &AppConfig) -> &str {
-    &cfg.server.host
 }
 
 fn auth_display(cfg: &AppConfig, c: &Colors) -> String {
@@ -294,52 +319,6 @@ enum ConnStatus {
     Fail,
 }
 
-/// Validate a single model entry, returning (ok, endpoints_to_test).
-fn validate_model(model: &ModelConfig, c: &Colors) -> (bool, Vec<ProviderEndpoint>) {
-    let mut ok = true;
-    let mut endpoints = Vec::new();
-
-    let aliases = model
-        .aliases
-        .as_ref()
-        .map(|a| a.join(", "))
-        .unwrap_or_default();
-    let alias_str = if aliases.is_empty() {
-        String::new()
-    } else {
-        format!(" (aliases: {aliases})")
-    };
-
-    let provider_names: Vec<String> = model.providers.iter().map(provider_short_label).collect();
-    let providers_str = provider_names.join(", ");
-
-    for deployment in &model.providers {
-        let (dep_ok, ep) = validate_deployment(deployment, c, &model.name);
-        if !dep_ok {
-            ok = false;
-        }
-        if let Some(ep) = ep {
-            endpoints.push(ep);
-        }
-    }
-
-    let icon = if ok {
-        format!("{green}\u{2713}{reset}", green = c.green, reset = c.reset)
-    } else {
-        format!(
-            "{yellow}\u{26a0}{reset}",
-            yellow = c.yellow,
-            reset = c.reset
-        )
-    };
-    println!(
-        "   {icon} {name}{alias_str} \u{2192} {providers_str}",
-        name = model.name
-    );
-
-    (ok, endpoints)
-}
-
 fn provider_short_label(d: &ProviderDeployment) -> String {
     match d.provider.as_str() {
         "openai" => {
@@ -351,67 +330,6 @@ fn provider_short_label(d: &ProviderDeployment) -> String {
         }
         other => other.to_string(),
     }
-}
-
-fn validate_deployment(
-    d: &ProviderDeployment,
-    c: &Colors,
-    model_name: &str,
-) -> (bool, Option<ProviderEndpoint>) {
-    let mut ok = true;
-
-    // Check provider type is valid
-    if !VALID_PROVIDERS.contains(&d.provider.as_str()) {
-        println!(
-            "      {red}\u{2717} {model_name}: unknown provider type '{}'  {reset}",
-            d.provider,
-            red = c.red,
-            reset = c.reset
-        );
-        ok = false;
-        return (ok, None);
-    }
-
-    // Check model name is present
-    if d.model.is_empty() {
-        println!(
-            "      {red}\u{2717} {model_name}/{}: model name is empty{reset}",
-            d.provider,
-            red = c.red,
-            reset = c.reset
-        );
-        ok = false;
-    }
-
-    // Provider-specific required field checks
-    match d.provider.as_str() {
-        "openai" | "anthropic" => {
-            if d.api_key.as_ref().is_none_or(|k| k.is_empty()) {
-                println!(
-                    "      {yellow}\u{26a0} {model_name}/{}: no api_key configured{reset}",
-                    d.provider,
-                    yellow = c.yellow,
-                    reset = c.reset
-                );
-            }
-        }
-        "vertex-ai" => {
-            if d.project_id.is_none() {
-                println!(
-                    "      {red}\u{2717} {model_name}/vertex-ai: project_id is required{reset}",
-                    red = c.red,
-                    reset = c.reset
-                );
-                ok = false;
-            }
-        }
-        _ => {}
-    }
-
-    // Build endpoint for connectivity testing
-    let endpoint = build_endpoint(d);
-
-    (ok, endpoint)
 }
 
 fn build_endpoint(d: &ProviderDeployment) -> Option<ProviderEndpoint> {
@@ -639,17 +557,6 @@ mod tests {
     use crate::config::schema::*;
 
     #[test]
-    fn test_valid_provider_types() {
-        assert!(VALID_PROVIDERS.contains(&"openai"));
-        assert!(VALID_PROVIDERS.contains(&"anthropic"));
-        assert!(VALID_PROVIDERS.contains(&"github-copilot"));
-        assert!(VALID_PROVIDERS.contains(&"chatgpt-subscription"));
-        assert!(VALID_PROVIDERS.contains(&"claude-subscription"));
-        assert!(VALID_PROVIDERS.contains(&"vertex-ai"));
-        assert!(!VALID_PROVIDERS.contains(&"invalid-provider"));
-    }
-
-    #[test]
     fn test_provider_short_label_openai_default() {
         let d = ProviderDeployment {
             provider: "openai".to_string(),
@@ -851,88 +758,5 @@ mod tests {
             location: None,
         };
         assert!(build_endpoint(&d).is_none());
-    }
-
-    #[test]
-    fn test_validate_model_valid() {
-        let c = Colors {
-            green: "",
-            red: "",
-            yellow: "",
-            bold: "",
-            reset: "",
-        };
-        let model = ModelConfig {
-            name: "gpt-5".to_string(),
-            aliases: Some(vec!["gpt-5.4".to_string()]),
-            providers: vec![ProviderDeployment {
-                provider: "chatgpt-subscription".to_string(),
-                model: "gpt-5.4".to_string(),
-                api_key: None,
-                base_url: None,
-                token_source: None,
-                credentials_path: None,
-                project_id: None,
-                location: None,
-            }],
-        };
-        let (ok, endpoints) = validate_model(&model, &c);
-        assert!(ok);
-        assert_eq!(endpoints.len(), 1);
-    }
-
-    #[test]
-    fn test_validate_model_invalid_provider() {
-        let c = Colors {
-            green: "",
-            red: "",
-            yellow: "",
-            bold: "",
-            reset: "",
-        };
-        let model = ModelConfig {
-            name: "test".to_string(),
-            aliases: None,
-            providers: vec![ProviderDeployment {
-                provider: "invalid-type".to_string(),
-                model: "test".to_string(),
-                api_key: None,
-                base_url: None,
-                token_source: None,
-                credentials_path: None,
-                project_id: None,
-                location: None,
-            }],
-        };
-        let (ok, endpoints) = validate_model(&model, &c);
-        assert!(!ok);
-        assert!(endpoints.is_empty());
-    }
-
-    #[test]
-    fn test_validate_model_vertex_missing_project_id() {
-        let c = Colors {
-            green: "",
-            red: "",
-            yellow: "",
-            bold: "",
-            reset: "",
-        };
-        let model = ModelConfig {
-            name: "gemini".to_string(),
-            aliases: None,
-            providers: vec![ProviderDeployment {
-                provider: "vertex-ai".to_string(),
-                model: "gemini-2.5-flash".to_string(),
-                api_key: None,
-                base_url: None,
-                token_source: None,
-                credentials_path: None,
-                project_id: None,
-                location: None,
-            }],
-        };
-        let (ok, _) = validate_model(&model, &c);
-        assert!(!ok);
     }
 }

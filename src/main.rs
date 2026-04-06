@@ -16,6 +16,7 @@ mod schema;
 mod server;
 mod setup;
 mod transform;
+mod validation;
 
 use crate::config::{paths::resolve_config_path, AppConfig};
 use crate::server::Server;
@@ -153,6 +154,33 @@ async fn run_serve(cli_config: Option<&str>) -> Result<()> {
         config = %config_path.display(),
         "Rausu starting"
     );
+
+    // ── Pre-startup validation ─────────────────────────────────────────────
+    let validation_result = validation::validate_config(&app_config);
+
+    if validation_result.has_errors() {
+        for issue in validation_result.errors() {
+            tracing::error!(
+                context = %issue.context,
+                "Config error: {}",
+                issue.message
+            );
+        }
+        anyhow::bail!(
+            "Configuration has {} error(s) — fix them and restart",
+            validation_result.errors().len()
+        );
+    }
+
+    if validation_result.has_warnings() {
+        for issue in validation_result.warnings() {
+            tracing::warn!(
+                context = %issue.context,
+                "Config warning: {}",
+                issue.message
+            );
+        }
+    }
 
     let server = Server::new(app_config)?;
     server.run().await
