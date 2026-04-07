@@ -9,6 +9,21 @@
   <a href="./README_CN.md">中文版</a>
 </p>
 
+<p align="center">
+  <a href="#quickstart">Quickstart</a> &bull;
+  <a href="#features">Features</a> &bull;
+  <a href="#configuration">Configuration</a> &bull;
+  <a href="#architecture">Architecture</a> &bull;
+  <a href="./README_CN.md">中文</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
+  <img src="https://img.shields.io/badge/version-0.1.0--dev-green?style=flat-square" alt="v0.1.0-dev" />
+  <img src="https://img.shields.io/badge/clippy-0%20warnings-brightgreen?style=flat-square" alt="Clippy" />
+</p>
+
 A high-performance LLM API gateway written in Rust. Single binary, zero runtime dependencies, protocol-aware routing across multiple LLM providers.
 
 ## Features

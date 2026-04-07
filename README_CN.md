@@ -9,6 +9,21 @@
   <a href="./README.md">English Version</a>
 </p>
 
+<p align="center">
+  <a href="#快速开始">快速开始</a> &bull;
+  <a href="#特性">特性</a> &bull;
+  <a href="#配置">配置</a> &bull;
+  <a href="#架构">架构</a> &bull;
+  <a href="README.md">English</a>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/language-Rust-orange?style=flat-square" alt="Rust" />
+  <img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT" />
+  <img src="https://img.shields.io/badge/version-0.1.0--dev-green?style=flat-square" alt="v0.1.0-dev" />
+  <img src="https://img.shields.io/badge/clippy-0%20warnings-brightgreen?style=flat-square" alt="Clippy" />
+</p>
+
 一个用 Rust 编写的高性能 LLM API 网关。单一二进制文件，零运行时依赖，协议感知的多 Provider 路由。
 
 ## 特性
