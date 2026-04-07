@@ -605,6 +605,11 @@ impl Provider for ChatGptSubscriptionProvider {
         "chatgpt-subscription"
     }
 
+    fn capabilities(&self) -> &'static [super::Capability] {
+        use super::Capability::*;
+        &[ChatCompletions, Streaming, Responses, MessagesApi, Tools]
+    }
+
     async fn chat_completions(
         &self,
         req: ChatCompletionRequest,

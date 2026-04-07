@@ -280,6 +280,11 @@ impl Provider for AnthropicProvider {
         "anthropic"
     }
 
+    fn capabilities(&self) -> &'static [super::Capability] {
+        use super::Capability::*;
+        &[ChatCompletions, Streaming, MessagesApi, Tools]
+    }
+
     async fn chat_completions(
         &self,
         req: ChatCompletionRequest,

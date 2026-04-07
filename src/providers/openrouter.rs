@@ -52,6 +52,11 @@ impl Provider for OpenRouterProvider {
         "openrouter"
     }
 
+    fn capabilities(&self) -> &'static [super::Capability] {
+        use super::Capability::*;
+        &[ChatCompletions, Streaming, Responses, Tools, ResponseFormat]
+    }
+
     async fn chat_completions(
         &self,
         req: ChatCompletionRequest,

@@ -12,6 +12,41 @@ use crate::schema::chat::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, ModelInfo,
 };
 
+/// Capabilities a provider can declare.
+///
+/// Used by the router to pre-filter providers before attempting upstream calls,
+/// ensuring unsupported requests fail fast with clear errors instead of relying
+/// solely on runtime error-driven failover.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Capability {
+    /// Non-streaming chat completions.
+    ChatCompletions,
+    /// Streaming chat completions (SSE).
+    Streaming,
+    /// Responses API handling (native or bridged through chat completions).
+    Responses,
+    /// Tool calling passthrough (tools + tool_choice).
+    Tools,
+    /// Structured output via response_format.
+    ResponseFormat,
+    /// Anthropic Messages API.
+    MessagesApi,
+}
+
+impl Capability {
+    /// Human-readable name for error messages.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Capability::ChatCompletions => "chat_completions",
+            Capability::Streaming => "streaming",
+            Capability::Responses => "responses_api",
+            Capability::Tools => "tools",
+            Capability::ResponseFormat => "response_format",
+            Capability::MessagesApi => "messages_api",
+        }
+    }
+}
+
 pub mod anthropic;
 pub mod chatgpt_subscription;
 pub mod claude_subscription;
@@ -94,6 +129,20 @@ pub fn is_retryable_status(status: u16) -> bool {
 pub trait Provider: Send + Sync {
     /// Returns the provider name (e.g. "openai", "anthropic").
     fn name(&self) -> &str;
+
+    /// Declare the capabilities this provider supports.
+    ///
+    /// The router uses this to pre-filter providers before attempting upstream
+    /// calls. The default declares basic chat completions and streaming only;
+    /// providers should override to advertise additional capabilities.
+    fn capabilities(&self) -> &'static [Capability] {
+        &[Capability::ChatCompletions, Capability::Streaming]
+    }
+
+    /// Check whether this provider supports a specific capability.
+    fn has_capability(&self, cap: Capability) -> bool {
+        self.capabilities().contains(&cap)
+    }
 
     /// Perform a non-streaming chat completion.
     async fn chat_completions(

@@ -413,6 +413,11 @@ impl Provider for GitHubCopilotProvider {
         "github-copilot"
     }
 
+    fn capabilities(&self) -> &'static [super::Capability] {
+        use super::Capability::*;
+        &[ChatCompletions, Streaming, Responses, MessagesApi, Tools]
+    }
+
     async fn chat_completions(
         &self,
         req: ChatCompletionRequest,

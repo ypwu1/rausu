@@ -21,7 +21,7 @@ use flate2::read::{DeflateDecoder, GzDecoder};
 use serde_json::Value;
 use tracing::{debug, error, info, warn};
 
-use crate::providers::is_retryable_status;
+use crate::providers::{is_retryable_status, Capability};
 use crate::schema::error::ErrorResponse;
 use crate::server::AppState;
 
@@ -194,6 +194,7 @@ async fn handle_responses(state: AppState, body: &mut Value) -> Response {
 
     let total_providers = provider_list.len();
     let mut providers_tried: Vec<String> = Vec::new();
+    let mut capability_skipped: usize = 0;
 
     for (attempt, (provider_name, provider_model)) in provider_list.iter().enumerate() {
         // Resolve the provider instance.
@@ -204,6 +205,17 @@ async fn handle_responses(state: AppState, body: &mut Value) -> Response {
                 continue;
             }
         };
+
+        // Capability pre-check: skip providers that don't support the Responses API
+        if !provider.has_capability(Capability::Responses) {
+            warn!(
+                model = %model_name,
+                provider = %provider_name,
+                "Provider does not support Responses API, skipping"
+            );
+            capability_skipped += 1;
+            continue;
+        }
 
         info!(model = %model_name, provider = %provider_name, attempt = attempt + 1, "Trying provider");
         providers_tried.push(provider_name.clone());
@@ -275,6 +287,18 @@ async fn handle_responses(state: AppState, body: &mut Value) -> Response {
     }
 
     // All providers exhausted.
+    if capability_skipped > 0 && providers_tried.is_empty() {
+        warn!(model = %model_name, "No provider supports the Responses API");
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorResponse::unsupported_capability(format!(
+                "No provider for model '{}' supports the required capability: responses_api",
+                model_name
+            ))),
+        )
+            .into_response();
+    }
+
     error!(model = %model_name, providers_tried = ?providers_tried, "All providers failed");
     (
         StatusCode::SERVICE_UNAVAILABLE,
@@ -349,6 +373,11 @@ mod tests {
     impl Provider for ResponsesCapableStubProvider {
         fn name(&self) -> &str {
             self.provider_name
+        }
+
+        fn capabilities(&self) -> &'static [Capability] {
+            use Capability::*;
+            &[ChatCompletions, Streaming, Responses]
         }
 
         fn models(&self) -> Vec<ModelInfo> {
@@ -442,9 +471,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_unsupported_provider_returns_405() {
-        // StubProvider does not override proxy_responses, so it returns Unsupported → 405.
-        // With single provider, Unsupported is the final answer.
+    async fn test_unsupported_provider_returns_422() {
+        // StubProvider uses default capabilities (no Responses). The capability
+        // pre-check catches this before attempting the call → 422.
         let app = make_app(
             vec![Box::new(StubProvider {
                 provider_name: "anthropic",
@@ -457,8 +486,7 @@ mod tests {
             r#"{"model": "claude-3", "input": "Hello"}"#,
         )
         .await;
-        // Single provider: Unsupported is retryable but no fallback available → 405.
-        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED);
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]
@@ -505,6 +533,11 @@ mod tests {
     impl Provider for UpstreamErrorStubProvider {
         fn name(&self) -> &str {
             self.provider_name
+        }
+
+        fn capabilities(&self) -> &'static [Capability] {
+            use Capability::*;
+            &[ChatCompletions, Streaming, Responses]
         }
 
         fn models(&self) -> Vec<ModelInfo> {

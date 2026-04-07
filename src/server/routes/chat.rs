@@ -9,10 +9,23 @@ use axum::{
 use futures::StreamExt;
 use tracing::{error, info, instrument, warn};
 
-use crate::providers::ProviderError;
+use crate::providers::{Capability, ProviderError};
 use crate::schema::chat::ChatCompletionRequest;
 use crate::schema::error::ErrorResponse;
 use crate::server::AppState;
+
+/// Determine which capabilities a chat completion request requires beyond basic
+/// chat completions (which is always required).
+fn required_capabilities(req: &ChatCompletionRequest) -> Vec<Capability> {
+    let mut caps = Vec::new();
+    if req.tools.is_some() {
+        caps.push(Capability::Tools);
+    }
+    if req.response_format.is_some() {
+        caps.push(Capability::ResponseFormat);
+    }
+    caps
+}
 
 /// POST /v1/chat/completions — proxy chat completion requests.
 ///
@@ -54,6 +67,8 @@ pub async fn chat_completions(
 
     let total_providers = provider_list.len();
     let mut providers_tried: Vec<String> = Vec::new();
+    let extra_caps = required_capabilities(&req);
+    let mut capability_skipped: usize = 0;
 
     for (attempt, (provider_name, provider_model)) in provider_list.iter().enumerate() {
         tracing::Span::current().record("provider", provider_name.as_str());
@@ -66,6 +81,23 @@ pub async fn chat_completions(
                 continue;
             }
         };
+
+        // Capability pre-check: skip providers that lack required capabilities
+        let missing: Vec<&Capability> = extra_caps
+            .iter()
+            .filter(|c| !provider.has_capability(**c))
+            .collect();
+        if !missing.is_empty() {
+            let names: Vec<&str> = missing.iter().map(|c| c.as_str()).collect();
+            warn!(
+                model = %model_name,
+                provider = %provider_name,
+                missing_capabilities = ?names,
+                "Provider lacks required capabilities, skipping"
+            );
+            capability_skipped += 1;
+            continue;
+        }
 
         info!(model = %model_name, provider = %provider_name, attempt = attempt + 1, "Trying provider");
         providers_tried.push(provider_name.clone());
@@ -106,7 +138,21 @@ pub async fn chat_completions(
         }
     }
 
-    // All providers exhausted (e.g. none could be resolved).
+    // All providers exhausted.
+    if capability_skipped > 0 && providers_tried.is_empty() {
+        // Every provider was skipped due to missing capabilities.
+        let cap_names: Vec<&str> = extra_caps.iter().map(|c| c.as_str()).collect();
+        warn!(model = %model_name, missing = ?cap_names, "No provider supports required capabilities");
+        return error_response(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            ErrorResponse::unsupported_capability(format!(
+                "No provider for model '{}' supports the required capabilities: {}",
+                model_name,
+                cap_names.join(", ")
+            )),
+        );
+    }
+
     error!(model = %model_name, providers_tried = ?providers_tried, "All providers failed");
     error_response(
         StatusCode::SERVICE_UNAVAILABLE,

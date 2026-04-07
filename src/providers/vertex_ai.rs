@@ -431,6 +431,11 @@ impl Provider for VertexAiProvider {
         "vertex-ai"
     }
 
+    fn capabilities(&self) -> &'static [super::Capability] {
+        use super::Capability::*;
+        &[ChatCompletions, Streaming, MessagesApi]
+    }
+
     async fn chat_completions(
         &self,
         req: ChatCompletionRequest,

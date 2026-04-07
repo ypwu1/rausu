@@ -46,4 +46,19 @@ impl ErrorResponse {
     pub fn invalid_request(message: impl Into<String>) -> Self {
         Self::new(message, "invalid_request_error")
     }
+
+    /// Create an unsupported capability error response.
+    ///
+    /// Returned when no configured provider for a model supports a required
+    /// capability (e.g. tools, response_format, responses API).
+    pub fn unsupported_capability(message: impl Into<String>) -> Self {
+        Self {
+            error: ErrorDetail {
+                message: message.into(),
+                r#type: "unsupported_capability".to_string(),
+                code: Some("unsupported_capability".to_string()),
+                param: None,
+            },
+        }
+    }
 }

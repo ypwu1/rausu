@@ -20,7 +20,7 @@ use futures::{stream, Stream};
 use serde_json::Value;
 use tower::ServiceExt;
 
-use rausu::providers::{Provider, ProviderError};
+use rausu::providers::{Capability, Provider, ProviderError};
 use rausu::schema::chat::{
     ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, Choice, ChunkChoice,
     Delta, Message, ModelInfo, Usage,
@@ -38,6 +38,11 @@ struct StubOpenRouterProvider {
 impl Provider for StubOpenRouterProvider {
     fn name(&self) -> &str {
         "openrouter"
+    }
+
+    fn capabilities(&self) -> &'static [Capability] {
+        use Capability::*;
+        &[ChatCompletions, Streaming, Responses, Tools, ResponseFormat]
     }
 
     fn models(&self) -> Vec<ModelInfo> {
@@ -231,6 +236,10 @@ fn make_chat_app(
         .route(
             "/v1/responses",
             post(rausu::server::routes::responses::responses),
+        )
+        .route(
+            "/v1/messages",
+            post(rausu::server::routes::messages::messages),
         )
         .with_state(state)
 }
@@ -501,4 +510,608 @@ async fn test_openrouter_response_format_passthrough() {
     )
     .await;
     assert_eq!(resp.status(), 200);
+}
+
+// ── Phase 1 Hardening: Capability-based routing tests ───────────────────────
+
+/// A stub provider with configurable capabilities for testing capability-based
+/// routing. Succeeds for chat completions and optionally responses.
+struct CapabilityStubProvider {
+    provider_name: &'static str,
+    caps: &'static [Capability],
+    /// If true, records received request fields for verification.
+    received_tools: std::sync::Arc<std::sync::Mutex<Option<Value>>>,
+    received_response_format: std::sync::Arc<std::sync::Mutex<Option<Value>>>,
+}
+
+impl CapabilityStubProvider {
+    fn new(provider_name: &'static str, caps: &'static [Capability]) -> Self {
+        Self {
+            provider_name,
+            caps,
+            received_tools: std::sync::Arc::new(std::sync::Mutex::new(None)),
+            received_response_format: std::sync::Arc::new(std::sync::Mutex::new(None)),
+        }
+    }
+}
+
+#[async_trait]
+impl Provider for CapabilityStubProvider {
+    fn name(&self) -> &str {
+        self.provider_name
+    }
+
+    fn capabilities(&self) -> &'static [Capability] {
+        self.caps
+    }
+
+    fn models(&self) -> Vec<ModelInfo> {
+        vec![]
+    }
+
+    async fn chat_completions(
+        &self,
+        req: ChatCompletionRequest,
+    ) -> Result<ChatCompletionResponse, ProviderError> {
+        // Record what we received for verification
+        if let Some(tools) = &req.tools {
+            *self.received_tools.lock().unwrap() =
+                Some(serde_json::to_value(tools).unwrap());
+        }
+        if let Some(fmt) = &req.response_format {
+            *self.received_response_format.lock().unwrap() = Some(fmt.clone());
+        }
+
+        Ok(ChatCompletionResponse {
+            id: "chatcmpl-cap-test".to_string(),
+            object: "chat.completion".to_string(),
+            created: 1700000000,
+            model: req.model.clone(),
+            choices: vec![Choice {
+                index: 0,
+                message: Message {
+                    role: "assistant".to_string(),
+                    content: Some(Value::String("ok".to_string())),
+                    tool_call_id: None,
+                    tool_calls: None,
+                    name: None,
+                },
+                finish_reason: Some("stop".to_string()),
+            }],
+            usage: Usage {
+                prompt_tokens: 1,
+                completion_tokens: 1,
+                total_tokens: 2,
+            },
+        })
+    }
+
+    async fn chat_completions_stream(
+        &self,
+        _req: ChatCompletionRequest,
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<ChatCompletionChunk, ProviderError>> + Send>>,
+        ProviderError,
+    > {
+        Ok(Box::pin(stream::empty()))
+    }
+
+    async fn proxy_responses(
+        &self,
+        _body: Value,
+        _is_stream: bool,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let http_resp = http::Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(bytes::Bytes::from(r#"{"id":"resp_cap_test"}"#))
+            .unwrap();
+        Ok(reqwest::Response::from(http_resp))
+    }
+
+    async fn proxy_messages(
+        &self,
+        _body: Value,
+        _is_stream: bool,
+        _client_betas: Option<String>,
+    ) -> Result<reqwest::Response, ProviderError> {
+        let http_resp = http::Response::builder()
+            .status(200)
+            .header("content-type", "application/json")
+            .body(bytes::Bytes::from(
+                r#"{"type":"message","content":[]}"#,
+            ))
+            .unwrap();
+        Ok(reqwest::Response::from(http_resp))
+    }
+}
+
+// ── Capability declaration tests ────────────────────────────────────────────
+
+#[test]
+fn test_capability_declaration_openrouter_stub() {
+    let p = StubOpenRouterProvider {
+        model_names: vec!["m".to_string()],
+    };
+    assert!(p.has_capability(Capability::ChatCompletions));
+    assert!(p.has_capability(Capability::Streaming));
+    assert!(p.has_capability(Capability::Responses));
+    assert!(p.has_capability(Capability::Tools));
+    assert!(p.has_capability(Capability::ResponseFormat));
+    assert!(!p.has_capability(Capability::MessagesApi));
+}
+
+#[test]
+fn test_capability_declaration_default() {
+    // UnsupportedProvider uses default capabilities (ChatCompletions + Streaming only)
+    let p = UnsupportedProvider;
+    assert!(p.has_capability(Capability::ChatCompletions));
+    assert!(p.has_capability(Capability::Streaming));
+    assert!(!p.has_capability(Capability::Tools));
+    assert!(!p.has_capability(Capability::ResponseFormat));
+    assert!(!p.has_capability(Capability::Responses));
+    assert!(!p.has_capability(Capability::MessagesApi));
+}
+
+// ── Capability-based prefilter: unsupported capability error ────────────────
+
+#[tokio::test]
+async fn test_capability_prefilter_tools_unsupported_returns_422() {
+    // Provider does not declare Tools capability; request includes tools.
+    // Should return 422 unsupported_capability, not attempt the call.
+    use Capability::*;
+    let app = make_chat_app(
+        vec![Box::new(CapabilityStubProvider::new(
+            "no-tools-provider",
+            &[ChatCompletions, Streaming], // no Tools
+        ))],
+        vec![registry_entry("m", "no-tools-provider", "m")],
+    );
+    let resp = post_json(
+        app,
+        "/v1/chat/completions",
+        r#"{
+            "model": "m",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [{"type": "function", "function": {"name": "f", "parameters": {}}}]
+        }"#,
+    )
+    .await;
+    assert_eq!(resp.status(), 422, "expected 422 for unsupported capability");
+
+    let body = body_json(resp).await;
+    assert_eq!(body["error"]["type"], "unsupported_capability");
+    assert_eq!(body["error"]["code"], "unsupported_capability");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("tools"),
+        "error message should name the missing capability"
+    );
+}
+
+#[tokio::test]
+async fn test_capability_prefilter_response_format_unsupported_returns_422() {
+    use Capability::*;
+    let app = make_chat_app(
+        vec![Box::new(CapabilityStubProvider::new(
+            "no-fmt-provider",
+            &[ChatCompletions, Streaming], // no ResponseFormat
+        ))],
+        vec![registry_entry("m", "no-fmt-provider", "m")],
+    );
+    let resp = post_json(
+        app,
+        "/v1/chat/completions",
+        r#"{
+            "model": "m",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "response_format": {"type": "json_object"}
+        }"#,
+    )
+    .await;
+    assert_eq!(resp.status(), 422);
+
+    let body = body_json(resp).await;
+    assert_eq!(body["error"]["type"], "unsupported_capability");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("response_format"),
+    );
+}
+
+#[tokio::test]
+async fn test_capability_prefilter_both_tools_and_format_unsupported() {
+    use Capability::*;
+    let app = make_chat_app(
+        vec![Box::new(CapabilityStubProvider::new(
+            "basic-provider",
+            &[ChatCompletions, Streaming],
+        ))],
+        vec![registry_entry("m", "basic-provider", "m")],
+    );
+    let resp = post_json(
+        app,
+        "/v1/chat/completions",
+        r#"{
+            "model": "m",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [{"type": "function", "function": {"name": "f", "parameters": {}}}],
+            "response_format": {"type": "json_object"}
+        }"#,
+    )
+    .await;
+    assert_eq!(resp.status(), 422);
+
+    let body = body_json(resp).await;
+    assert_eq!(body["error"]["type"], "unsupported_capability");
+    let msg = body["error"]["message"].as_str().unwrap();
+    assert!(msg.contains("tools"), "should mention tools");
+    assert!(msg.contains("response_format"), "should mention response_format");
+}
+
+// ── Capability-based failover ──────────────────────────────────────────────
+
+#[tokio::test]
+async fn test_capability_failover_tools_first_lacks_second_has() {
+    // First provider lacks Tools, second declares it. Request with tools
+    // should skip the first and succeed on the second.
+    use Capability::*;
+    let app = make_chat_app(
+        vec![
+            Box::new(CapabilityStubProvider::new(
+                "no-tools",
+                &[ChatCompletions, Streaming],
+            )),
+            Box::new(CapabilityStubProvider::new(
+                "has-tools",
+                &[ChatCompletions, Streaming, Tools, ResponseFormat],
+            )),
+        ],
+        vec![(
+            "m".to_string(),
+            vec![
+                ("no-tools".to_string(), "m".to_string()),
+                ("has-tools".to_string(), "m".to_string()),
+            ],
+        )],
+    );
+    let resp = post_json(
+        app,
+        "/v1/chat/completions",
+        r#"{
+            "model": "m",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [{"type": "function", "function": {"name": "f", "parameters": {}}}]
+        }"#,
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "should failover to capable provider");
+}
+
+#[tokio::test]
+async fn test_capability_failover_response_format() {
+    use Capability::*;
+    let app = make_chat_app(
+        vec![
+            Box::new(CapabilityStubProvider::new(
+                "no-fmt",
+                &[ChatCompletions, Streaming, Tools],
+            )),
+            Box::new(CapabilityStubProvider::new(
+                "has-fmt",
+                &[ChatCompletions, Streaming, Tools, ResponseFormat],
+            )),
+        ],
+        vec![(
+            "m".to_string(),
+            vec![
+                ("no-fmt".to_string(), "m".to_string()),
+                ("has-fmt".to_string(), "m".to_string()),
+            ],
+        )],
+    );
+    let resp = post_json(
+        app,
+        "/v1/chat/completions",
+        r#"{
+            "model": "m",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "response_format": {"type": "json_object"}
+        }"#,
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+}
+
+// ── No silent stripping of capability-bearing fields ───────────────────────
+
+#[tokio::test]
+async fn test_no_silent_tools_stripping() {
+    // Verify that the tools field is preserved in the request delivered to the provider.
+    use Capability::*;
+    let provider = CapabilityStubProvider::new(
+        "openrouter",
+        &[ChatCompletions, Streaming, Responses, Tools, ResponseFormat],
+    );
+    let tools_capture = provider.received_tools.clone();
+
+    let app = make_chat_app(
+        vec![Box::new(provider)],
+        vec![registry_entry("m", "openrouter", "m")],
+    );
+    let resp = post_json(
+        app,
+        "/v1/chat/completions",
+        r#"{
+            "model": "m",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [{"type": "function", "function": {"name": "get_weather", "parameters": {"type": "object", "properties": {"city": {"type": "string"}}}}}]
+        }"#,
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    let captured = tools_capture.lock().unwrap();
+    assert!(captured.is_some(), "tools should have been passed to provider");
+    let tools_val = captured.as_ref().unwrap();
+    assert!(tools_val.is_array());
+    assert_eq!(tools_val.as_array().unwrap().len(), 1);
+    assert_eq!(tools_val[0]["function"]["name"], "get_weather");
+}
+
+#[tokio::test]
+async fn test_no_silent_response_format_stripping() {
+    use Capability::*;
+    let provider = CapabilityStubProvider::new(
+        "openrouter",
+        &[ChatCompletions, Streaming, Responses, Tools, ResponseFormat],
+    );
+    let fmt_capture = provider.received_response_format.clone();
+
+    let app = make_chat_app(
+        vec![Box::new(provider)],
+        vec![registry_entry("m", "openrouter", "m")],
+    );
+    let resp = post_json(
+        app,
+        "/v1/chat/completions",
+        r#"{
+            "model": "m",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "response_format": {"type": "json_object"}
+        }"#,
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+
+    let captured = fmt_capture.lock().unwrap();
+    assert!(
+        captured.is_some(),
+        "response_format should have been passed to provider"
+    );
+    assert_eq!(captured.as_ref().unwrap()["type"], "json_object");
+}
+
+// ── Responses route capability checks ──────────────────────────────────────
+
+#[tokio::test]
+async fn test_responses_capability_prefilter_returns_422() {
+    // Provider without Responses capability → should return 422, not 405
+    use Capability::*;
+    let app = make_chat_app(
+        vec![Box::new(CapabilityStubProvider::new(
+            "no-responses",
+            &[ChatCompletions, Streaming, MessagesApi],
+        ))],
+        vec![registry_entry("m", "no-responses", "m")],
+    );
+    let resp = post_json(
+        app,
+        "/v1/responses",
+        r#"{"model": "m", "input": "Hello"}"#,
+    )
+    .await;
+    assert_eq!(resp.status(), 422);
+
+    let body = body_json(resp).await;
+    assert_eq!(body["error"]["type"], "unsupported_capability");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("responses_api"),
+    );
+}
+
+#[tokio::test]
+async fn test_responses_capability_failover_to_capable() {
+    // First provider lacks Responses, second has it → should succeed.
+    use Capability::*;
+    let app = make_chat_app(
+        vec![
+            Box::new(CapabilityStubProvider::new(
+                "no-responses",
+                &[ChatCompletions, Streaming, MessagesApi],
+            )),
+            Box::new(CapabilityStubProvider::new(
+                "has-responses",
+                &[ChatCompletions, Streaming, Responses],
+            )),
+        ],
+        vec![(
+            "m".to_string(),
+            vec![
+                ("no-responses".to_string(), "m".to_string()),
+                ("has-responses".to_string(), "m".to_string()),
+            ],
+        )],
+    );
+    let resp = post_json(
+        app,
+        "/v1/responses",
+        r#"{"model": "m", "input": "Hello"}"#,
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+}
+
+// ── Messages route capability checks ───────────────────────────────────────
+
+#[tokio::test]
+async fn test_messages_capability_prefilter_returns_422() {
+    // Provider without MessagesApi → should return 422
+    use Capability::*;
+    let app = make_chat_app(
+        vec![Box::new(CapabilityStubProvider::new(
+            "openrouter",
+            &[ChatCompletions, Streaming, Responses, Tools, ResponseFormat],
+        ))],
+        vec![registry_entry("m", "openrouter", "m")],
+    );
+    let resp = post_json(
+        app,
+        "/v1/messages",
+        r#"{"model": "m", "messages": [], "max_tokens": 100}"#,
+    )
+    .await;
+    assert_eq!(resp.status(), 422);
+
+    let body = body_json(resp).await;
+    assert_eq!(body["error"]["type"], "unsupported_capability");
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("messages_api"),
+    );
+}
+
+#[tokio::test]
+async fn test_messages_capability_failover_to_capable() {
+    use Capability::*;
+    let app = make_chat_app(
+        vec![
+            Box::new(CapabilityStubProvider::new(
+                "openrouter",
+                &[ChatCompletions, Streaming, Responses],
+            )),
+            Box::new(CapabilityStubProvider::new(
+                "anthropic",
+                &[ChatCompletions, Streaming, MessagesApi, Tools],
+            )),
+        ],
+        vec![(
+            "m".to_string(),
+            vec![
+                ("openrouter".to_string(), "m".to_string()),
+                ("anthropic".to_string(), "m".to_string()),
+            ],
+        )],
+    );
+    let resp = post_json(
+        app,
+        "/v1/messages",
+        r#"{"model": "m", "messages": [], "max_tokens": 100}"#,
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+}
+
+// ── Unsupported capability error contract ──────────────────────────────────
+
+#[tokio::test]
+async fn test_unsupported_capability_error_contract() {
+    // Verify the error response shape matches the documented contract.
+    use Capability::*;
+    let app = make_chat_app(
+        vec![Box::new(CapabilityStubProvider::new(
+            "basic",
+            &[ChatCompletions, Streaming],
+        ))],
+        vec![registry_entry("m", "basic", "m")],
+    );
+    let resp = post_json(
+        app,
+        "/v1/chat/completions",
+        r#"{
+            "model": "m",
+            "messages": [{"role": "user", "content": "Hi"}],
+            "tools": [{"type": "function", "function": {"name": "f", "parameters": {}}}]
+        }"#,
+    )
+    .await;
+    assert_eq!(resp.status(), 422);
+
+    let body = body_json(resp).await;
+    // Verify all error contract fields
+    assert!(body["error"].is_object(), "error should be an object");
+    assert_eq!(body["error"]["type"], "unsupported_capability");
+    assert_eq!(body["error"]["code"], "unsupported_capability");
+    assert!(
+        body["error"]["message"].is_string(),
+        "message should be a string"
+    );
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("tools"),
+        "message should name the missing capability"
+    );
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("m"),
+        "message should name the model"
+    );
+}
+
+// ── Basic request without capability-bearing fields still works ─────────────
+
+#[tokio::test]
+async fn test_basic_request_without_tools_succeeds_on_any_provider() {
+    // A request without tools/response_format should succeed even on a
+    // provider that only declares basic capabilities.
+    use Capability::*;
+    let app = make_chat_app(
+        vec![Box::new(CapabilityStubProvider::new(
+            "basic",
+            &[ChatCompletions, Streaming],
+        ))],
+        vec![registry_entry("m", "basic", "m")],
+    );
+    let resp = post_json(
+        app,
+        "/v1/chat/completions",
+        r#"{"model": "m", "messages": [{"role": "user", "content": "Hi"}]}"#,
+    )
+    .await;
+    assert_eq!(resp.status(), 200, "basic request should succeed");
+}
+
+// ── Responses bridge via OpenRouter with capability check ──────────────────
+
+#[tokio::test]
+async fn test_openrouter_responses_bridge_with_capability_check() {
+    // OpenRouter declares Responses capability → should handle /v1/responses
+    let app = make_chat_app(
+        vec![Box::new(StubOpenRouterProvider {
+            model_names: vec!["or-model".to_string()],
+        })],
+        vec![registry_entry("or-model", "openrouter", "openai/gpt-4o")],
+    );
+    let resp = post_json(
+        app,
+        "/v1/responses",
+        r#"{"model": "or-model", "input": [{"role": "user", "content": "Hi"}]}"#,
+    )
+    .await;
+    assert_eq!(resp.status(), 200);
+    let body = body_json(resp).await;
+    assert_eq!(body["id"], "resp_or_test");
 }

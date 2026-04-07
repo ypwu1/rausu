@@ -10,7 +10,7 @@ use axum::{
 use serde_json::Value;
 use tracing::{error, info, warn};
 
-use crate::providers::is_retryable_status;
+use crate::providers::{is_retryable_status, Capability};
 use crate::schema::error::ErrorResponse;
 use crate::server::AppState;
 
@@ -69,34 +69,9 @@ pub async fn messages(
 
     let total_providers = provider_list.len();
     let mut providers_tried: Vec<String> = Vec::new();
+    let mut capability_skipped: usize = 0;
 
     for (attempt, (provider_name, provider_model)) in provider_list.iter().enumerate() {
-        // Only providers that speak the Anthropic Messages API are allowed here.
-        let supports_messages = matches!(
-            provider_name.as_str(),
-            "anthropic"
-                | "claude-subscription"
-                | "vertex-ai"
-                | "github-copilot"
-                | "chatgpt-subscription"
-        );
-        if !supports_messages {
-            if total_providers == 1 {
-                return (
-                    StatusCode::BAD_REQUEST,
-                    Json(ErrorResponse::invalid_request(format!(
-                        "Provider '{}' does not support the Anthropic Messages API. \
-                         Use /v1/chat/completions instead.",
-                        provider_name
-                    ))),
-                )
-                    .into_response();
-            }
-            // Multi-provider: skip unsupported, try next
-            warn!(model = %model_name, provider = %provider_name, "Provider does not support Messages API, skipping");
-            continue;
-        }
-
         // Resolve the provider instance.
         let provider = match state.providers.iter().find(|p| p.name() == *provider_name) {
             Some(p) => p,
@@ -105,6 +80,17 @@ pub async fn messages(
                 continue;
             }
         };
+
+        // Capability pre-check: skip providers that don't support the Messages API
+        if !provider.has_capability(Capability::MessagesApi) {
+            warn!(
+                model = %model_name,
+                provider = %provider_name,
+                "Provider does not support Messages API, skipping"
+            );
+            capability_skipped += 1;
+            continue;
+        }
 
         info!(model = %model_name, provider = %provider_name, attempt = attempt + 1, "Trying provider");
         providers_tried.push(provider_name.clone());
@@ -179,6 +165,19 @@ pub async fn messages(
     }
 
     // All providers exhausted.
+    if capability_skipped > 0 && providers_tried.is_empty() {
+        warn!(model = %model_name, "No provider supports the Messages API");
+        return (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            Json(ErrorResponse::unsupported_capability(format!(
+                "No provider for model '{}' supports the required capability: messages_api. \
+                 Use /v1/chat/completions instead.",
+                model_name
+            ))),
+        )
+            .into_response();
+    }
+
     error!(model = %model_name, providers_tried = ?providers_tried, "All providers failed");
     (
         StatusCode::SERVICE_UNAVAILABLE,
@@ -225,6 +224,11 @@ mod tests {
     impl Provider for MessagesCapableStubProvider {
         fn name(&self) -> &str {
             self.provider_name
+        }
+
+        fn capabilities(&self) -> &'static [Capability] {
+            use Capability::*;
+            &[ChatCompletions, Streaming, MessagesApi]
         }
 
         fn models(&self) -> Vec<ModelInfo> {
@@ -347,7 +351,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_non_messages_provider_returns_400() {
+    async fn test_non_messages_provider_returns_422() {
+        // Provider without MessagesApi capability → 422 unsupported_capability.
         let app = make_app(
             vec![Box::new(StubProvider {
                 provider_name: "openai",
@@ -359,7 +364,7 @@ mod tests {
             r#"{"model": "gpt-4o", "messages": [], "max_tokens": 100}"#,
         )
         .await;
-        assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(resp.status(), StatusCode::UNPROCESSABLE_ENTITY);
     }
 
     #[tokio::test]
