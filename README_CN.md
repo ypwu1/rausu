@@ -42,7 +42,16 @@ cargo build --release
 ./target/release/rausu --config config.yaml
 ```
 
-### 方式二：Docker
+### 方式二：Docker（GHCR）
+
+```bash
+docker pull ghcr.io/ypwu1/rausu:latest
+docker run -p 4000:4000 -v $(pwd)/config.yaml:/app/config.yaml ghcr.io/ypwu1/rausu:latest
+```
+
+多架构镜像（linux/amd64、linux/arm64）在每个版本标签时发布到 `ghcr.io/ypwu1/rausu`。可用标签：`latest`、`vX.Y.Z`、`vX.Y`。
+
+### 方式三：Docker（从源码构建）
 
 ```bash
 docker build -t rausu .

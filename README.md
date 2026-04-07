@@ -42,7 +42,16 @@ Alternatively, point to an explicit config file:
 ./target/release/rausu --config config.yaml
 ```
 
-### Option 2: Docker
+### Option 2: Docker (GHCR)
+
+```bash
+docker pull ghcr.io/ypwu1/rausu:latest
+docker run -p 4000:4000 -v $(pwd)/config.yaml:/app/config.yaml ghcr.io/ypwu1/rausu:latest
+```
+
+Multi-arch images (linux/amd64, linux/arm64) are published to `ghcr.io/ypwu1/rausu` on every version tag. Available tags: `latest`, `vX.Y.Z`, `vX.Y`.
+
+### Option 3: Docker (build from source)
 
 ```bash
 docker build -t rausu .
