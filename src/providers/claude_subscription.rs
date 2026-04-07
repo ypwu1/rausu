@@ -661,6 +661,7 @@ mod tests {
             user: None,
             tools: None,
             tool_choice: None,
+            response_format: None,
             seed: None,
             logprobs: None,
             top_logprobs: None,

@@ -9,6 +9,7 @@ use crate::config::schema::{AppConfig, ModelConfig, ProviderDeployment};
 /// Known provider types.
 pub const VALID_PROVIDERS: &[&str] = &[
     "openai",
+    "openrouter",
     "anthropic",
     "claude-subscription",
     "chatgpt-subscription",
@@ -202,7 +203,7 @@ fn validate_deployment(
 
     // Provider-specific checks
     match d.provider.as_str() {
-        "openai" | "anthropic" => {
+        "openai" | "openrouter" | "anthropic" => {
             if d.api_key.as_ref().is_none_or(|k| k.is_empty()) {
                 result.push_warning(&ctx, "no api_key configured");
             }

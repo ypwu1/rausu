@@ -3,7 +3,7 @@
 use anyhow::{bail, Result};
 use std::path::{Path, PathBuf};
 
-use crate::config::paths::default_config_path;
+use rausu::config::paths::default_config_path;
 
 /// Minimal but fully commented YAML template written by `rausu init`.
 pub const CONFIG_TEMPLATE: &str = r#"# rausu — LLM API Gateway configuration

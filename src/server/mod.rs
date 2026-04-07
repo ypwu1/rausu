@@ -30,7 +30,7 @@ use crate::config::AppConfig;
 use crate::providers::{
     anthropic::AnthropicProvider, chatgpt_subscription::ChatGptSubscriptionProvider,
     claude_subscription::ClaudeSubscriptionProvider, github_copilot::GitHubCopilotProvider,
-    openai::OpenAiProvider, vertex_ai::VertexAiProvider, Provider,
+    openai::OpenAiProvider, openrouter::OpenRouterProvider, vertex_ai::VertexAiProvider, Provider,
 };
 use crate::schema::chat::ModelInfo;
 
@@ -219,6 +219,7 @@ async fn build_providers(
 
     // Collect model names per provider type
     let mut openai_models: Vec<(String, String, String, Option<String>)> = Vec::new(); // (virtual, api_key, model, base_url)
+    let mut openrouter_models: Vec<(String, String, String, Option<String>)> = Vec::new(); // (virtual, api_key, model, base_url)
     let mut anthropic_models: Vec<(String, String, String)> = Vec::new();
     // (virtual_name, provider_model, token_source_str, credentials_path)
     let mut claude_sub_models: Vec<(String, String, String, Option<String>)> = Vec::new();
@@ -241,6 +242,15 @@ async fn build_providers(
                         deployment.base_url.clone(),
                     ));
                     Some(("openai".to_string(), deployment.model.clone()))
+                }
+                "openrouter" => {
+                    openrouter_models.push((
+                        model_cfg.name.clone(),
+                        api_key,
+                        deployment.model.clone(),
+                        deployment.base_url.clone(),
+                    ));
+                    Some(("openrouter".to_string(), deployment.model.clone()))
                 }
                 "anthropic" => {
                     anthropic_models.push((
@@ -347,6 +357,32 @@ async fn build_providers(
                 Some(url_key)
             };
             providers.push(Box::new(OpenAiProvider::new(
+                api_key,
+                base_url,
+                model_names,
+            )));
+        }
+    }
+
+    // Create one OpenRouter provider per unique (api_key, base_url) pair.
+    if !openrouter_models.is_empty() {
+        let mut by_key: std::collections::HashMap<(String, String), Vec<String>> =
+            std::collections::HashMap::new();
+        for (virtual_name, api_key, _model, base_url) in &openrouter_models {
+            let url_key = base_url.clone().unwrap_or_default();
+            by_key
+                .entry((api_key.clone(), url_key))
+                .or_default()
+                .push(virtual_name.clone());
+        }
+
+        for ((api_key, url_key), model_names) in by_key {
+            let base_url = if url_key.is_empty() {
+                None
+            } else {
+                Some(url_key)
+            };
+            providers.push(Box::new(OpenRouterProvider::new(
                 api_key,
                 base_url,
                 model_names,

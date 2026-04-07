@@ -8,12 +8,12 @@ use inquire::{Confirm, InquireError, MultiSelect, Password, PasswordDisplayMode,
 use std::path::{Path, PathBuf};
 use uuid::Uuid;
 
-use crate::config::paths::{default_config_path, resolve_config_path};
-use crate::config::schema::{
+use rausu::config::paths::{default_config_path, resolve_config_path};
+use rausu::config::schema::{
     AppConfig, AuthConfig, AuthKey, LoggingConfig, ModelConfig, ProviderDeployment, ServerConfig,
     TlsConfig,
 };
-use crate::validation::{self, Severity};
+use rausu::validation::{self, Severity};
 
 // ── Provider catalogue ───────────────────────────────────────────────────────
 
@@ -22,6 +22,7 @@ const PROVIDER_TYPES: &[&str] = &[
     "chatgpt-subscription",
     "claude-subscription",
     "openai",
+    "openrouter",
     "anthropic",
     "vertex-ai",
 ];
@@ -32,6 +33,7 @@ fn provider_display(p: &str) -> &str {
         "chatgpt-subscription" => "ChatGPT Subscription (no API key needed)",
         "claude-subscription" => "Claude Subscription (no API key needed)",
         "openai" => "OpenAI API (requires API key)",
+        "openrouter" => "OpenRouter (requires API key)",
         "anthropic" => "Anthropic API (requires API key)",
         "vertex-ai" => "Vertex AI (requires GCP project)",
         other => other,
@@ -60,6 +62,12 @@ fn provider_model_suggestions(provider: &str) -> Vec<&'static str> {
         "chatgpt-subscription" => vec!["gpt-5", "gpt-4o", "o3", "o4-mini"],
         "claude-subscription" => vec!["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
         "openai" => vec!["gpt-4o", "gpt-4o-mini", "o3", "o4-mini"],
+        "openrouter" => vec![
+            "openai/gpt-4o",
+            "anthropic/claude-sonnet-4",
+            "google/gemini-2.5-pro",
+            "meta-llama/llama-4-maverick",
+        ],
         "anthropic" => vec!["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
         "vertex-ai" => vec!["gemini-2.5-pro", "gemini-2.5-flash"],
         _ => vec![],
@@ -481,6 +489,7 @@ fn prompt_provider_deployment(
         "chatgpt-subscription" => prompt_chatgpt_deployment(virtual_name),
         "claude-subscription" => prompt_claude_sub_deployment(virtual_name),
         "openai" => prompt_openai_deployment(virtual_name),
+        "openrouter" => prompt_openrouter_deployment(virtual_name),
         "anthropic" => prompt_anthropic_deployment(virtual_name),
         "vertex-ai" => prompt_vertex_deployment(virtual_name),
         _ => Ok(None),
@@ -583,6 +592,27 @@ fn prompt_openai_deployment(
         model,
         api_key: Some(api_key),
         base_url,
+        token_source: None,
+        credentials_path: None,
+        project_id: None,
+        location: None,
+    }))
+}
+
+fn prompt_openrouter_deployment(
+    virtual_name: &str,
+) -> std::result::Result<Option<ProviderDeployment>, InquireError> {
+    let model = prompt_model_name("openrouter", virtual_name)?;
+    let api_key = Password::new("API key:")
+        .with_display_mode(PasswordDisplayMode::Masked)
+        .without_confirmation()
+        .with_help_message("Supports ${ENV_VAR} syntax — get a key at https://openrouter.ai/keys")
+        .prompt()?;
+    Ok(Some(ProviderDeployment {
+        provider: "openrouter".to_string(),
+        model,
+        api_key: Some(api_key),
+        base_url: None,
         token_source: None,
         credentials_path: None,
         project_id: None,

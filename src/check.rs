@@ -7,11 +7,11 @@ use anyhow::{Context, Result};
 use std::io::IsTerminal;
 use std::path::PathBuf;
 
-use crate::config::{
+use rausu::config::{
     paths::resolve_config_path,
     schema::{AppConfig, ProviderDeployment},
 };
-use crate::validation::{self, Severity};
+use rausu::validation::{self, Severity};
 
 /// ANSI color helpers — return empty strings when not a TTY.
 struct Colors {
@@ -116,7 +116,7 @@ pub async fn run_check(cli_config: Option<&str>) -> Result<()> {
 
         // Attempt to parse PEMs if files exist
         if cert_ok && key_ok && ca_ok {
-            match crate::server::tls::build_rustls_server_config(tls) {
+            match rausu::server::tls::build_rustls_server_config(tls) {
                 Ok(_) => {
                     println!(
                         "   {green}\u{2713}{reset} {mode_label} configuration valid (PEM parsed OK)",
@@ -319,11 +319,11 @@ enum ConnStatus {
 
 fn provider_short_label(d: &ProviderDeployment) -> String {
     match d.provider.as_str() {
-        "openai" => {
+        "openai" | "openrouter" => {
             if let Some(url) = &d.base_url {
-                format!("openai ({url})")
+                format!("{} ({url})", d.provider)
             } else {
-                "openai".to_string()
+                d.provider.clone()
             }
         }
         other => other.to_string(),
@@ -343,6 +343,24 @@ fn build_endpoint(d: &ProviderDeployment) -> Option<ProviderEndpoint> {
             };
             Some(ProviderEndpoint {
                 key: format!("openai:{base}"),
+                label,
+                kind: EndpointKind::HttpGet { url },
+            })
+        }
+        "openrouter" => {
+            let base = d
+                .base_url
+                .as_deref()
+                .unwrap_or("https://openrouter.ai/api/v1");
+            let base = base.trim_end_matches('/');
+            let url = format!("{base}/models");
+            let label = if d.base_url.is_some() {
+                format!("openrouter ({base})")
+            } else {
+                "openrouter (https://openrouter.ai/api/v1)".to_string()
+            };
+            Some(ProviderEndpoint {
+                key: format!("openrouter:{base}"),
                 label,
                 kind: EndpointKind::HttpGet { url },
             })
@@ -552,7 +570,7 @@ fn validate_tls_file(path: &str, description: &str, c: &Colors) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::schema::*;
+    use rausu::config::schema::*;
 
     #[test]
     fn test_provider_short_label_openai_default() {

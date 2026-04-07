@@ -104,6 +104,9 @@ pub struct ChatCompletionRequest {
     /// Tool choice setting.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<Value>,
+    /// Response format constraint (e.g. `{"type": "json_object"}`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub response_format: Option<Value>,
     /// Seed for deterministic sampling.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub seed: Option<i64>,

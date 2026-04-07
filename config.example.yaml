@@ -41,6 +41,31 @@ models:
         model: o3
         api_key: "${OPENAI_API_KEY}"
 
+  # ── OpenRouter (API key — access 100+ models through a single key) ──────────
+  # Get an API key at https://openrouter.ai/keys
+  # Model IDs use the provider/model format (e.g. "openai/gpt-4o",
+  # "anthropic/claude-sonnet-4"). See https://openrouter.ai/models for the
+  # full catalogue.
+  - name: openrouter-gpt-4o
+    providers:
+      - provider: openrouter
+        model: openai/gpt-4o
+        api_key: "${OPENROUTER_API_KEY}"
+
+  - name: openrouter-claude-sonnet
+    providers:
+      - provider: openrouter
+        model: anthropic/claude-sonnet-4
+        api_key: "${OPENROUTER_API_KEY}"
+
+  # Optional: use a custom base URL (e.g. self-hosted OpenRouter-compatible proxy)
+  # - name: or-custom
+  #   providers:
+  #     - provider: openrouter
+  #       model: openai/gpt-4o
+  #       api_key: "${OPENROUTER_API_KEY}"
+  #       base_url: "https://my-openrouter-proxy.example.com/api/v1"
+
   # ── Anthropic (API key) ──────────────────────────────────────────────────────
   - name: claude-sonnet
     providers:

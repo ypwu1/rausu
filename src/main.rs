@@ -7,19 +7,13 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use tracing::info;
 
-mod auth;
 mod check;
-mod config;
 mod init;
-mod providers;
-mod schema;
-mod server;
 mod setup;
-mod transform;
-mod validation;
 
-use crate::config::{paths::resolve_config_path, AppConfig};
-use crate::server::Server;
+use rausu::config::{paths::resolve_config_path, AppConfig};
+use rausu::server::Server;
+use rausu::validation;
 
 /// Rausu LLM API Gateway
 #[derive(Parser, Debug)]
@@ -103,7 +97,7 @@ async fn run_serve(cli_config: Option<&str>) -> Result<()> {
     let config_path = match resolve_config_path(cli_config) {
         Some(p) => p,
         None => {
-            let default_path = config::paths::default_config_path();
+            let default_path = rausu::config::paths::default_config_path();
             init::write_template(&default_path, false).with_context(|| {
                 format!(
                     "Failed to write template config to {} — check directory permissions",
