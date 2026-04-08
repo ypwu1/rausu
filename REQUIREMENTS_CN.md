@@ -405,25 +405,28 @@ spend:
 ### Phase 2 — 本地代理稳固化
 **目标**：可靠、无摩擦的单用户本地代理体验。
 
-- [ ] 假 Key 兼容——接受本地客户端传入的任意 API Key（Rausu 负责处理真实上游认证）
-- [ ] 支持 `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` 覆盖（工具透明接管）
-- [ ] 超时、指数退避重试
+- [x] 假 Key 兼容——接受本地客户端传入的任意 API Key（Rausu 负责处理真实上游认证）
+- [x] 支持 `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` 覆盖（工具透明接管）
+- [x] 连接超时（每个 provider 10 秒，超时返回 HTTP 504）
+- [ ] 指数退避重试
 - [ ] 结构化单请求日志记录（本地文件，无需数据库）
-- [ ] 优雅关闭改进
-- [ ] `/v1/models` 列表反映已配置的 provider
+- [x] 优雅关闭（SIGTERM + SIGINT）
+- [x] `/v1/models` 列表反映已配置的 provider
 
 **退出标准**：任意指向 Rausu 的 OpenAI SDK 或 Anthropic SDK 客户端均可稳定运行，无需额外配置。
 
 ### Phase 3 — API 网关扩展
 **目标**：面向团队/自托管场景的生产级多 provider 路由。
 
-- [ ] AWS Bedrock / Azure OpenAI / Google Vertex AI / Ollama provider
+- [x] OpenRouter / GitHub Copilot / Vertex AI provider
+- [ ] AWS Bedrock / Azure OpenAI / Ollama provider
 - [ ] 路由器：指数退避重试
-- [ ] 路由器：故障转移链
+- [x] 路由器：故障转移链（按优先级顺序在可重试错误上切换 provider：429、5xx、传输错误）
 - [ ] 路由器：加权负载均衡
+- [x] 能力优先路由——跳过不支持所需能力的 provider；当无 provider 满足时返回 422 `unsupported_capability`
 - [ ] `/v1/embeddings` 端点
 - [ ] `/v1/images/generations` 端点
-- [ ] 基础 API Key 认证（master key）
+- [x] 基础 API Key 认证（静态 Bearer Token，可配置白名单）
 - [ ] 每个 provider 的熔断器
 - [ ] 远程绑定（非 localhost）+ 可选 TLS 终止
 

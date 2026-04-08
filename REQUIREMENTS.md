@@ -405,25 +405,28 @@ The delivery order is **local-first**: get the single-user localhost proxy solid
 ### Phase 2 — Local Proxy Hardening
 **Goal**: Reliable, friction-free single-user local proxy experience.
 
-- [ ] Fake-key compatibility — accept any API key from local clients (Rausu handles real upstream auth)
-- [ ] `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` override support for transparent tool takeover
-- [ ] Timeouts, retries with exponential backoff
+- [x] Fake-key compatibility — accept any API key from local clients (Rausu handles real upstream auth)
+- [x] `OPENAI_BASE_URL` / `ANTHROPIC_BASE_URL` override support for transparent tool takeover
+- [x] Connect timeouts (10 s per provider, surfaced as HTTP 504)
+- [ ] Retries with exponential backoff
 - [ ] Structured per-request logging (local file, no database required)
-- [ ] Graceful shutdown improvements
-- [ ] `/v1/models` list reflecting configured providers
+- [x] Graceful shutdown (SIGTERM + SIGINT)
+- [x] `/v1/models` list reflecting configured providers
 
 **Exit Criteria**: Any OpenAI SDK or Anthropic SDK client pointed at Rausu works reliably with no configuration friction.
 
 ### Phase 3 — API Gateway Expansion
 **Goal**: Production-grade multi-provider routing for team / self-hosted use.
 
-- [ ] AWS Bedrock / Azure OpenAI / Google Vertex AI / Ollama providers
+- [x] OpenRouter / GitHub Copilot / Vertex AI providers
+- [ ] AWS Bedrock / Azure OpenAI / Ollama providers
 - [ ] Router: retry with exponential backoff
-- [ ] Router: fallback chain
+- [x] Router: fallback chain (priority-ordered failover on retryable errors: 429, 5xx, transport)
 - [ ] Router: weighted load balancing
+- [x] Capability-first routing — skip providers lacking required capabilities; return 422 `unsupported_capability` when none qualify
 - [ ] `/v1/embeddings` endpoint
 - [ ] `/v1/images/generations` endpoint
-- [ ] Basic API key authentication (master key)
+- [x] Basic API key authentication (static bearer-token keys, configurable allow-list)
 - [ ] Circuit breaker per provider
 - [ ] Remote bind (non-localhost) + optional TLS termination
 
