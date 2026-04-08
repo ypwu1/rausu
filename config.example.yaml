@@ -66,6 +66,24 @@ models:
   #       api_key: "${OPENROUTER_API_KEY}"
   #       base_url: "https://my-openrouter-proxy.example.com/api/v1"
 
+  # ── Z.AI (API key — OpenAI-compatible) ───────────────────────────────────────
+  # Get an API key at https://z.ai
+  # Z.AI provides OpenAI-compatible endpoints. Model IDs follow Z.AI's naming
+  # convention (e.g. "z-ai-1-preview"). See Z.AI documentation for available models.
+  - name: z-ai-1-preview
+    providers:
+      - provider: z-ai
+        model: z-ai-1-preview
+        api_key: "${Z_AI_API_KEY}"
+
+  # Optional: use a custom base URL
+  # - name: z-ai-custom
+  #   providers:
+  #     - provider: z-ai
+  #       model: z-ai-1-preview
+  #       api_key: "${Z_AI_API_KEY}"
+  #       base_url: "https://custom-zai-proxy.example.com/v4"
+
   # ── Anthropic (API key) ──────────────────────────────────────────────────────
   - name: claude-sonnet
     providers:

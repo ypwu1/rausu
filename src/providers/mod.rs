@@ -55,6 +55,7 @@ pub mod minimax;
 pub mod openai;
 pub mod openrouter;
 pub mod vertex_ai;
+pub mod zai;
 
 /// Error type for provider operations.
 #[derive(Debug, Error)]
