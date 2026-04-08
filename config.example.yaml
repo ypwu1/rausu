@@ -134,6 +134,35 @@ models:
   #       api_key: "${DEEPSEEK_API_KEY}"
   #       base_url: "https://my-deepseek-proxy.example.com"
 
+  # ── Azure OpenAI (API key + Azure endpoint) ──────────────────────────────────
+  # Get an API key from the Azure portal → your OpenAI resource → Keys and Endpoint.
+  # base_url is REQUIRED: https://<resource-name>.openai.azure.com/
+  # model is the Azure deployment name (not the OpenAI model ID).
+  # api_version defaults to "2024-12-01-preview" when omitted.
+  - name: gpt-4o-azure
+    providers:
+      - provider: azure-openai
+        model: gpt-4o                     # Azure deployment name
+        api_key: "${AZURE_OPENAI_API_KEY}"
+        base_url: "https://my-resource.openai.azure.com/"
+        # api_version: "2024-12-01-preview"   # optional; defaults to 2024-12-01-preview
+
+  - name: gpt-4o-mini-azure
+    providers:
+      - provider: azure-openai
+        model: gpt-4o-mini                # Azure deployment name
+        api_key: "${AZURE_OPENAI_API_KEY}"
+        base_url: "https://my-resource.openai.azure.com/"
+
+  # Optional: use a specific API version
+  # - name: o3-azure
+  #   providers:
+  #     - provider: azure-openai
+  #       model: o3-deployment
+  #       api_key: "${AZURE_OPENAI_API_KEY}"
+  #       base_url: "https://my-resource.openai.azure.com/"
+  #       api_version: "2025-01-01-preview"
+
   # ── Anthropic (API key) ──────────────────────────────────────────────────────
   - name: claude-sonnet
     providers:

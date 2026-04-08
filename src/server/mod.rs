@@ -28,7 +28,8 @@ use crate::auth::oauth::{OAuthTokenManager, TokenSource};
 use crate::auth::vertex::VertexTokenManager;
 use crate::config::AppConfig;
 use crate::providers::{
-    anthropic::AnthropicProvider, chatgpt_subscription::ChatGptSubscriptionProvider,
+    anthropic::AnthropicProvider, azure_openai::AzureOpenAiProvider,
+    chatgpt_subscription::ChatGptSubscriptionProvider,
     claude_subscription::ClaudeSubscriptionProvider, deepseek::DeepSeekProvider,
     github_copilot::GitHubCopilotProvider, minimax::MiniMaxProvider, moonshot::MoonshotProvider,
     openai::OpenAiProvider, openrouter::OpenRouterProvider, vertex_ai::VertexAiProvider,
@@ -233,7 +234,10 @@ async fn build_providers(
     let mut zai_models: Vec<(String, String, String, Option<String>)> = Vec::new(); // (virtual, api_key, model, base_url)
     let mut moonshot_models: Vec<(String, String, String, Option<String>)> = Vec::new(); // (virtual, api_key, model, base_url)
     let mut deepseek_models: Vec<(String, String, String, Option<String>)> = Vec::new(); // (virtual, api_key, model, base_url)
-                                                                                         // (virtual_name, provider_model, project_id, location, credentials_path)
+                                                                                         // (virtual, api_key, model, base_url, api_version)
+    let mut azure_openai_models: Vec<(String, String, String, Option<String>, Option<String>)> =
+        Vec::new();
+    // (virtual_name, provider_model, project_id, location, credentials_path)
     let mut vertex_models: Vec<(String, String, String, String, Option<String>)> = Vec::new();
 
     for model_cfg in &config.models {
@@ -328,6 +332,24 @@ async fn build_providers(
                         deployment.base_url.clone(),
                     ));
                     Some(("deepseek".to_string(), deployment.model.clone()))
+                }
+                "azure-openai" => {
+                    if deployment.base_url.as_ref().is_none_or(|u| u.is_empty()) {
+                        tracing::error!(
+                            model = %model_cfg.name,
+                            "azure-openai requires base_url (e.g. https://<resource>.openai.azure.com/); skipping"
+                        );
+                        None
+                    } else {
+                        azure_openai_models.push((
+                            model_cfg.name.clone(),
+                            api_key,
+                            deployment.model.clone(),
+                            deployment.base_url.clone(),
+                            deployment.api_version.clone(),
+                        ));
+                        Some(("azure-openai".to_string(), deployment.model.clone()))
+                    }
                 }
                 "vertex-ai" => {
                     let project_id = deployment.project_id.clone().unwrap_or_default();
@@ -532,6 +554,21 @@ async fn build_providers(
         }
     }
 
+    // Create one Azure OpenAI provider per unique (api_key, base_url, deployment, api_version) tuple.
+    // Each Azure deployment maps to a specific model, so we create one provider per deployment.
+    if !azure_openai_models.is_empty() {
+        for (virtual_name, api_key, deployment_name, base_url, api_version) in azure_openai_models {
+            let base_url = base_url.expect("azure-openai base_url validated above");
+            providers.push(Box::new(AzureOpenAiProvider::new(
+                api_key,
+                base_url,
+                deployment_name,
+                api_version,
+                vec![virtual_name],
+            )));
+        }
+    }
+
     // Create one Anthropic provider per unique api_key
     if !anthropic_models.is_empty() {
         let mut by_key: std::collections::HashMap<String, Vec<String>> =
@@ -725,6 +762,7 @@ mod tests {
             base_url: None,
             token_source: None,
             credentials_path: None,
+            api_version: None,
             project_id: None,
             location: None,
         }
@@ -842,6 +880,7 @@ mod tests {
             base_url: base_url.map(|s| s.to_string()),
             token_source: None,
             credentials_path: None,
+            api_version: None,
             project_id: None,
             location: None,
         }

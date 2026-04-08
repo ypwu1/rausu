@@ -24,6 +24,7 @@ const PROVIDER_TYPES: &[&str] = &[
     "openai",
     "openrouter",
     "anthropic",
+    "azure-openai",
     "vertex-ai",
 ];
 
@@ -35,6 +36,7 @@ fn provider_display(p: &str) -> &str {
         "openai" => "OpenAI API (requires API key)",
         "openrouter" => "OpenRouter (requires API key)",
         "anthropic" => "Anthropic API (requires API key)",
+        "azure-openai" => "Azure OpenAI (requires API key + Azure endpoint)",
         "vertex-ai" => "Vertex AI (requires GCP project)",
         other => other,
     }
@@ -69,6 +71,7 @@ fn provider_model_suggestions(provider: &str) -> Vec<&'static str> {
             "meta-llama/llama-4-maverick",
         ],
         "anthropic" => vec!["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
+        "azure-openai" => vec!["gpt-4o", "gpt-4o-mini", "o3"],
         "vertex-ai" => vec!["gemini-2.5-pro", "gemini-2.5-flash"],
         _ => vec![],
     }
@@ -491,6 +494,7 @@ fn prompt_provider_deployment(
         "openai" => prompt_openai_deployment(virtual_name),
         "openrouter" => prompt_openrouter_deployment(virtual_name),
         "anthropic" => prompt_anthropic_deployment(virtual_name),
+        "azure-openai" => prompt_azure_openai_deployment(virtual_name),
         "vertex-ai" => prompt_vertex_deployment(virtual_name),
         _ => Ok(None),
     }
@@ -529,6 +533,7 @@ fn prompt_copilot_deployment(
         base_url: None,
         token_source: None,
         credentials_path: None,
+        api_version: None,
         project_id: None,
         location: None,
     }))
@@ -547,6 +552,7 @@ fn prompt_chatgpt_deployment(
         base_url: None,
         token_source: Some(token_source.to_string()),
         credentials_path: None,
+        api_version: None,
         project_id: None,
         location: None,
     }))
@@ -565,6 +571,7 @@ fn prompt_claude_sub_deployment(
         base_url: None,
         token_source: Some(token_source.to_string()),
         credentials_path: None,
+        api_version: None,
         project_id: None,
         location: None,
     }))
@@ -594,6 +601,7 @@ fn prompt_openai_deployment(
         base_url,
         token_source: None,
         credentials_path: None,
+        api_version: None,
         project_id: None,
         location: None,
     }))
@@ -615,6 +623,7 @@ fn prompt_openrouter_deployment(
         base_url: None,
         token_source: None,
         credentials_path: None,
+        api_version: None,
         project_id: None,
         location: None,
     }))
@@ -636,6 +645,39 @@ fn prompt_anthropic_deployment(
         base_url: None,
         token_source: None,
         credentials_path: None,
+        api_version: None,
+        project_id: None,
+        location: None,
+    }))
+}
+
+fn prompt_azure_openai_deployment(
+    virtual_name: &str,
+) -> std::result::Result<Option<ProviderDeployment>, InquireError> {
+    let model = prompt_model_name("azure-openai", virtual_name)?;
+    let api_key = Password::new("API key:")
+        .with_display_mode(PasswordDisplayMode::Masked)
+        .without_confirmation()
+        .with_help_message("Supports ${ENV_VAR} syntax")
+        .prompt()?;
+    let base_url = Text::new("Azure resource endpoint (e.g. https://<resource>.openai.azure.com):")
+        .prompt()?;
+    let api_version = Text::new("API version:")
+        .with_default("2024-12-01-preview")
+        .prompt()?;
+    let api_version = if api_version.is_empty() {
+        None
+    } else {
+        Some(api_version)
+    };
+    Ok(Some(ProviderDeployment {
+        provider: "azure-openai".to_string(),
+        model,
+        api_key: Some(api_key),
+        base_url: Some(base_url),
+        token_source: None,
+        credentials_path: None,
+        api_version,
         project_id: None,
         location: None,
     }))
@@ -660,6 +702,7 @@ fn prompt_vertex_deployment(
         base_url: None,
         token_source: None,
         credentials_path,
+        api_version: None,
         project_id: Some(project_id),
         location: Some(location),
     }))
@@ -1103,6 +1146,9 @@ pub fn generate_yaml(config: &AppConfig) -> String {
                 if let Some(ts) = &p.token_source {
                     yaml.push_str(&format!("        token_source: {ts}\n"));
                 }
+                if let Some(av) = &p.api_version {
+                    yaml.push_str(&format!("        api_version: {av}\n"));
+                }
                 if let Some(pid) = &p.project_id {
                     yaml.push_str(&format!("        project_id: {pid}\n"));
                 }
@@ -1185,6 +1231,7 @@ mod tests {
                         base_url: None,
                         token_source: None,
                         credentials_path: None,
+                        api_version: None,
                         project_id: None,
                         location: None,
                     }],
@@ -1199,6 +1246,7 @@ mod tests {
                         base_url: None,
                         token_source: None,
                         credentials_path: None,
+                        api_version: None,
                         project_id: None,
                         location: None,
                     }],
@@ -1278,6 +1326,7 @@ mod tests {
                     api_key: None,
                     base_url: None,
                     token_source: None,
+                    api_version: None,
                     project_id: Some("my-gcp-project".to_string()),
                     location: Some("us-central1".to_string()),
                     credentials_path: Some("/path/to/creds.json".to_string()),
@@ -1349,6 +1398,7 @@ mod tests {
                     base_url: None,
                     token_source: Some("auto".to_string()),
                     credentials_path: None,
+                    api_version: None,
                     project_id: None,
                     location: None,
                 }],
@@ -1375,6 +1425,7 @@ mod tests {
                     base_url: Some("https://api.deepseek.com/v1".to_string()),
                     token_source: None,
                     credentials_path: None,
+                    api_version: None,
                     project_id: None,
                     location: None,
                 }],
@@ -1401,6 +1452,7 @@ mod tests {
                     base_url: None,
                     token_source: None,
                     credentials_path: None,
+                    api_version: None,
                     project_id: None,
                     location: None,
                 }],
@@ -1436,6 +1488,7 @@ mod tests {
                     base_url: None,
                     token_source: None,
                     credentials_path: None,
+                    api_version: None,
                     project_id: None,
                     location: None,
                 }],
@@ -1470,6 +1523,7 @@ mod tests {
                     base_url: None,
                     token_source: None,
                     credentials_path: None,
+                    api_version: None,
                     project_id: None,
                     location: None,
                 }],
@@ -1503,6 +1557,7 @@ mod tests {
                     base_url: None,
                     token_source: None,
                     credentials_path: None,
+                    api_version: None,
                     project_id: None,
                     location: None,
                 }],
@@ -1531,6 +1586,7 @@ mod tests {
                     base_url: None,
                     token_source: None,
                     credentials_path: None,
+                    api_version: None,
                     project_id: None,
                     location: None,
                 }],
@@ -1563,6 +1619,7 @@ mod tests {
                     base_url: None,
                     token_source: None,
                     credentials_path: None,
+                    api_version: None,
                     project_id: None,
                     location: None,
                 }],
@@ -1597,6 +1654,7 @@ mod tests {
                     base_url: None,
                     token_source: None,
                     credentials_path: None,
+                    api_version: None,
                     project_id: None,
                     location: None,
                 }],
@@ -1701,6 +1759,7 @@ auth:
                         base_url: None,
                         token_source: None,
                         credentials_path: None,
+                        api_version: None,
                         project_id: None,
                         location: None,
                     },
@@ -1711,6 +1770,7 @@ auth:
                         base_url: None,
                         token_source: None,
                         credentials_path: None,
+                        api_version: None,
                         project_id: None,
                         location: None,
                     },

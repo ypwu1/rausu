@@ -623,6 +623,7 @@ async fn test_deepseek_build_providers_registration() {
                 base_url: None,
                 token_source: None,
                 credentials_path: None,
+                api_version: None,
                 project_id: None,
                 location: None,
             }],

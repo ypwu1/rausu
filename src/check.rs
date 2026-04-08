@@ -426,6 +426,23 @@ fn build_endpoint(d: &ProviderDeployment) -> Option<ProviderEndpoint> {
                 },
             })
         }
+        "azure-openai" => {
+            let base = d.base_url.as_deref().unwrap_or("");
+            let base = base.trim_end_matches('/');
+            if base.is_empty() {
+                return None;
+            }
+            let api_version = d.api_version.as_deref().unwrap_or("2024-12-01-preview");
+            let url = format!(
+                "{base}/openai/deployments/{}/chat/completions?api-version={api_version}",
+                d.model
+            );
+            Some(ProviderEndpoint {
+                key: format!("azure-openai:{base}/{}", d.model),
+                label: format!("azure-openai ({base}/{})", d.model),
+                kind: EndpointKind::HttpGet { url },
+            })
+        }
         _ => None,
     }
 }
@@ -581,6 +598,7 @@ mod tests {
             base_url: None,
             token_source: None,
             credentials_path: None,
+            api_version: None,
             project_id: None,
             location: None,
         };
@@ -596,6 +614,7 @@ mod tests {
             base_url: Some("https://api.deepseek.com/v1".to_string()),
             token_source: None,
             credentials_path: None,
+            api_version: None,
             project_id: None,
             location: None,
         };
@@ -614,6 +633,7 @@ mod tests {
             base_url: None,
             token_source: None,
             credentials_path: None,
+            api_version: None,
             project_id: None,
             location: None,
         };
@@ -701,6 +721,7 @@ mod tests {
             base_url: None,
             token_source: None,
             credentials_path: None,
+            api_version: None,
             project_id: None,
             location: None,
         };
@@ -720,6 +741,7 @@ mod tests {
             base_url: Some("https://api.deepseek.com/v1".to_string()),
             token_source: None,
             credentials_path: None,
+            api_version: None,
             project_id: None,
             location: None,
         };
@@ -736,6 +758,7 @@ mod tests {
             base_url: None,
             token_source: None,
             credentials_path: None,
+            api_version: None,
             project_id: None,
             location: None,
         };
@@ -753,6 +776,7 @@ mod tests {
             base_url: None,
             token_source: None,
             credentials_path: None,
+            api_version: None,
             project_id: None,
             location: None,
         };
@@ -770,6 +794,7 @@ mod tests {
             base_url: None,
             token_source: None,
             credentials_path: None,
+            api_version: None,
             project_id: None,
             location: None,
         };

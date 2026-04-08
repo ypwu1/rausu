@@ -14,6 +14,7 @@ pub const VALID_PROVIDERS: &[&str] = &[
     "claude-subscription",
     "chatgpt-subscription",
     "github-copilot",
+    "azure-openai",
     "vertex-ai",
 ];
 
@@ -208,6 +209,17 @@ fn validate_deployment(
                 result.push_warning(&ctx, "no api_key configured");
             }
         }
+        "azure-openai" => {
+            if d.api_key.as_ref().is_none_or(|k| k.is_empty()) {
+                result.push_warning(&ctx, "no api_key configured");
+            }
+            if d.base_url.as_ref().is_none_or(|u| u.is_empty()) {
+                result.push_error(
+                    &ctx,
+                    "base_url is required for azure-openai (e.g. https://<resource>.openai.azure.com/)",
+                );
+            }
+        }
         "vertex-ai" => {
             if d.project_id.is_none() {
                 result.push_error(&ctx, "project_id is required");
@@ -279,6 +291,7 @@ mod tests {
             base_url: None,
             token_source: None,
             credentials_path: None,
+            api_version: None,
             project_id: None,
             location: None,
         }
@@ -393,6 +406,7 @@ mod tests {
                 base_url: None,
                 token_source: None,
                 credentials_path: None,
+                api_version: None,
                 project_id: None,
                 location: None,
             }],
@@ -417,6 +431,7 @@ mod tests {
                 base_url: None,
                 token_source: Some("bogus".to_string()),
                 credentials_path: None,
+                api_version: None,
                 project_id: None,
                 location: None,
             }],
@@ -441,6 +456,7 @@ mod tests {
                 base_url: None,
                 token_source: Some("invalid".to_string()),
                 credentials_path: None,
+                api_version: None,
                 project_id: None,
                 location: None,
             }],
@@ -484,6 +500,7 @@ mod tests {
                 base_url: None,
                 token_source: None,
                 credentials_path: None,
+                api_version: None,
                 project_id: None,
                 location: None,
             }],
@@ -534,6 +551,7 @@ mod tests {
                     base_url: None,
                     token_source: Some(ts.to_string()),
                     credentials_path: None,
+                    api_version: None,
                     project_id: None,
                     location: None,
                 }],

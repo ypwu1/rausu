@@ -141,6 +141,11 @@ pub struct ProviderDeployment {
     ///   ADC path `~/.config/gcloud/application_default_credentials.json`.
     pub credentials_path: Option<String>,
 
+    // ── Azure OpenAI specific ────────────────────────────────────────────────
+    /// Azure OpenAI API version query parameter (e.g. `"2024-12-01-preview"`).
+    /// Required for `azure-openai`; defaults to `"2024-12-01-preview"` when omitted.
+    pub api_version: Option<String>,
+
     // ── Vertex AI specific ────────────────────────────────────────────────────
     /// GCP project ID (required for `vertex-ai`).
     pub project_id: Option<String>,
