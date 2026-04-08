@@ -29,7 +29,7 @@ A high-performance LLM API gateway written in Rust. Single binary, zero runtime 
 ## Features
 
 - **OpenAI-compatible API** — works with any OpenAI SDK client
-- **Multi-provider** — supports OpenAI, Anthropic (API key), Claude Subscription (OAuth), GitHub Copilot, ChatGPT Subscription (OAuth), and any OpenAI-compatible provider (DeepSeek, Qwen, Ollama, GLM, Moonshot, etc.)
+- **Multi-provider** — supports OpenAI, Anthropic (API key), Claude Subscription (OAuth), GitHub Copilot, ChatGPT Subscription (OAuth), OpenRouter, and any OpenAI-compatible provider (DeepSeek, Qwen, Ollama, GLM, Moonshot, etc.)
 - **Protocol Bridge** — bi-directional conversion between OpenAI Responses API and Anthropic Messages API; Codex CLI can use Claude models or any OpenAI-compatible provider, Claude Code can use GPT models or any OpenAI-compatible provider
 - **True SSE Streaming** — zero-buffer per-event streaming for all paths including protocol bridge (first-token latency matches passthrough)
 - **Streaming** — full SSE streaming support
@@ -253,7 +253,11 @@ models:
 
 **Supported models:** `gpt-5.4`, `gpt-5.4-pro`, `gpt-5.3-codex`, `gpt-5.3-codex-spark`, `gpt-5.3-instant`, `gpt-5.3-chat-latest`
 
-> **Note:** All four providers (`openai`, `anthropic`, `claude-subscription`, `chatgpt-subscription`) are completely independent and can coexist in the same config, serving different virtual model names.
+> **Note:** All providers (`openai`, `anthropic`, `claude-subscription`, `chatgpt-subscription`, `openrouter`, and others) are completely independent and can coexist in the same config, serving different virtual model names.
+
+### `openrouter` provider
+
+Routes requests through [OpenRouter](https://openrouter.ai), giving access to 100+ models (OpenAI, Anthropic, Google, Meta, and more) with a single API key. Supports chat completions, streaming, and Responses API bridging. See [docs/OPENROUTER_PROVIDER.md](docs/OPENROUTER_PROVIDER.md) for full configuration, model IDs, and capability-aware routing details.
 
 ### Authentication
 

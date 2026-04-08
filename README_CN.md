@@ -29,7 +29,7 @@
 ## 特性
 
 - **OpenAI 兼容 API** — 适配任何 OpenAI SDK 客户端
-- **多 Provider 支持** — 支持 OpenAI、Anthropic（API Key）、Claude 订阅（OAuth）、GitHub Copilot、ChatGPT 订阅（OAuth），以及任意 OpenAI 兼容服务（DeepSeek、Qwen、Ollama、GLM、Moonshot 等）
+- **多 Provider 支持** — 支持 OpenAI、Anthropic（API Key）、Claude 订阅（OAuth）、GitHub Copilot、ChatGPT 订阅（OAuth）、OpenRouter，以及任意 OpenAI 兼容服务（DeepSeek、Qwen、Ollama、GLM、Moonshot 等）
 - **协议桥接** — OpenAI Responses API 与 Anthropic Messages API 双向转换；Codex CLI 可使用 Claude 模型或任意 OpenAI 兼容服务，Claude Code 可使用 GPT 模型或任意 OpenAI 兼容服务
 - **真正的 SSE 流式传输** — 包括协议桥接路径在内的所有路径均实现零缓冲逐事件流式传输（首 token 延迟与直传路径一致）
 - **流式传输** — 完整的 SSE 流式支持
@@ -251,7 +251,11 @@ models:
 
 **支持的模型：** `gpt-5.4`、`gpt-5.4-pro`、`gpt-5.3-codex`、`gpt-5.3-codex-spark`、`gpt-5.3-instant`、`gpt-5.3-chat-latest`
 
-> **注意：** 四个 Provider（`openai`、`anthropic`、`claude-subscription`、`chatgpt-subscription`）完全独立，可以在同一配置文件中共存，分别服务不同的虚拟模型名称。
+> **注意：** 所有 Provider（`openai`、`anthropic`、`claude-subscription`、`chatgpt-subscription`、`openrouter` 等）完全独立，可以在同一配置文件中共存，分别服务不同的虚拟模型名称。
+
+### `openrouter` provider
+
+通过 [OpenRouter](https://openrouter.ai) 路由请求，使用单一 API Key 即可访问 100+ 个模型（OpenAI、Anthropic、Google、Meta 等）。支持聊天补全、流式传输和 Responses API 桥接。完整配置、模型 ID 及能力感知路由详情请参见 [docs/OPENROUTER_PROVIDER_CN.md](docs/OPENROUTER_PROVIDER_CN.md)。
 
 ### 认证
 

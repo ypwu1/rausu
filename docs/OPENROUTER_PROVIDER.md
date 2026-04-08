@@ -163,14 +163,51 @@ OpenRouter models can participate in Rausu's priority-based failover alongside o
       api_key: "${OPENROUTER_API_KEY}"
 ```
 
-## Capability and tool support
+## Capability-aware routing
 
-- **Tools / function calling:** Passed through as-is to OpenRouter. Support depends on the upstream model.
-- **tool_choice:** Passed through as-is.
-- **response_format:** Passed through as-is.
-- **Streaming:** Fully supported via SSE.
+The OpenRouter provider declares the following capabilities to Rausu's router:
 
-Rausu does not silently strip capability-sensitive fields. If the upstream model does not support a requested capability (e.g. tools on a model that lacks function calling), the upstream error is propagated to the client.
+| Capability | Declared |
+|---|---|
+| `chat_completions` | Yes |
+| `streaming` | Yes (SSE) |
+| `responses_api` | Yes (Responses → Chat Completions bridge) |
+| `tools` | Yes (passed through to OpenRouter) |
+| `response_format` | Yes (passed through to OpenRouter) |
+
+**How routing works:**
+
+1. When a request arrives the router inspects it and determines which capabilities are required. A request containing `tools` requires `tools`; a request with `response_format` requires `response_format`.
+2. Providers that lack any required capability are **skipped before any upstream call** is made.
+3. If another configured provider for the same virtual model supports the required capabilities, failover continues there.
+4. If **no** configured provider supports all required capabilities, Rausu returns a clear client-facing error instead of silently degrading or stripping fields.
+
+### `unsupported_capability` error
+
+When all providers for a model are skipped due to missing capabilities, Rausu returns:
+
+- **HTTP status:** `422 Unprocessable Entity`
+- **`error.type`:** `unsupported_capability`
+- **`error.code`:** `unsupported_capability`
+- **`error.message`:** names the missing capability or capabilities
+
+Example response body:
+
+```json
+{
+  "error": {
+    "message": "No provider for model 'my-model' supports the required capabilities: tools",
+    "type": "unsupported_capability",
+    "code": "unsupported_capability"
+  }
+}
+```
+
+### No silent downgrade policy
+
+Rausu does **not** silently strip `tools`, `tool_choice`, or `response_format` fields from requests on the OpenRouter path. If the selected upstream model does not support a requested capability, the upstream error is propagated to the client unchanged.
+
+> **Note:** The capability declarations above reflect what the OpenRouter provider in Rausu exposes to the router. Actual capability support can still depend on the specific upstream model selected through OpenRouter. For example, `tools` being declared means Rausu will forward the field to OpenRouter, but a model that does not support function calling will return an error from OpenRouter itself.
 
 ## Docker deployment
 
