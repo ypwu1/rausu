@@ -84,6 +84,30 @@ models:
   #       api_key: "${Z_AI_API_KEY}"
   #       base_url: "https://custom-zai-proxy.example.com/v4"
 
+  # ── Moonshot / Kimi (API key — OpenAI-compatible) ────────────────────────────
+  # Get an API key at https://platform.moonshot.cn
+  # Default base URL: https://api.moonshot.ai/v1
+  # Common model IDs: moonshot-v1-8k | moonshot-v1-32k | moonshot-v1-128k
+  - name: moonshot-v1-8k
+    providers:
+      - provider: moonshot
+        model: moonshot-v1-8k
+        api_key: "${MOONSHOT_API_KEY}"
+
+  - name: moonshot-v1-32k
+    providers:
+      - provider: moonshot
+        model: moonshot-v1-32k
+        api_key: "${MOONSHOT_API_KEY}"
+
+  # Optional: use a custom base URL (e.g. self-hosted Moonshot-compatible proxy)
+  # - name: moonshot-custom
+  #   providers:
+  #     - provider: moonshot
+  #       model: moonshot-v1-8k
+  #       api_key: "${MOONSHOT_API_KEY}"
+  #       base_url: "https://my-moonshot-proxy.example.com/v1"
+
   # ── Anthropic (API key) ──────────────────────────────────────────────────────
   - name: claude-sonnet
     providers:
