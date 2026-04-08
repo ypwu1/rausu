@@ -108,6 +108,32 @@ models:
   #       api_key: "${MOONSHOT_API_KEY}"
   #       base_url: "https://my-moonshot-proxy.example.com/v1"
 
+  # ── DeepSeek (API key — OpenAI-compatible) ────────────────────────────────────
+  # Get an API key at https://platform.deepseek.com
+  # Default base URL: https://api.deepseek.com
+  # Note: https://api.deepseek.com/v1 also works for OpenAI client-library
+  # compatibility, but the /v1 path is NOT a model-version signal.
+  # Common model IDs: deepseek-chat | deepseek-reasoner
+  - name: deepseek-chat
+    providers:
+      - provider: deepseek
+        model: deepseek-chat
+        api_key: "${DEEPSEEK_API_KEY}"
+
+  - name: deepseek-reasoner
+    providers:
+      - provider: deepseek
+        model: deepseek-reasoner
+        api_key: "${DEEPSEEK_API_KEY}"
+
+  # Optional: use a custom base URL (e.g. self-hosted DeepSeek-compatible proxy)
+  # - name: deepseek-custom
+  #   providers:
+  #     - provider: deepseek
+  #       model: deepseek-chat
+  #       api_key: "${DEEPSEEK_API_KEY}"
+  #       base_url: "https://my-deepseek-proxy.example.com"
+
   # ── Anthropic (API key) ──────────────────────────────────────────────────────
   - name: claude-sonnet
     providers:

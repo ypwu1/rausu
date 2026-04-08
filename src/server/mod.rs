@@ -29,9 +29,10 @@ use crate::auth::vertex::VertexTokenManager;
 use crate::config::AppConfig;
 use crate::providers::{
     anthropic::AnthropicProvider, chatgpt_subscription::ChatGptSubscriptionProvider,
-    claude_subscription::ClaudeSubscriptionProvider, github_copilot::GitHubCopilotProvider,
-    minimax::MiniMaxProvider, moonshot::MoonshotProvider, openai::OpenAiProvider,
-    openrouter::OpenRouterProvider, vertex_ai::VertexAiProvider, zai::ZaiProvider, Provider,
+    claude_subscription::ClaudeSubscriptionProvider, deepseek::DeepSeekProvider,
+    github_copilot::GitHubCopilotProvider, minimax::MiniMaxProvider, moonshot::MoonshotProvider,
+    openai::OpenAiProvider, openrouter::OpenRouterProvider, vertex_ai::VertexAiProvider,
+    zai::ZaiProvider, Provider,
 };
 use crate::schema::chat::ModelInfo;
 
@@ -231,6 +232,7 @@ async fn build_providers(
     let mut copilot_models: Vec<(String, String, String, Option<String>)> = Vec::new();
     let mut zai_models: Vec<(String, String, String, Option<String>)> = Vec::new(); // (virtual, api_key, model, base_url)
     let mut moonshot_models: Vec<(String, String, String, Option<String>)> = Vec::new(); // (virtual, api_key, model, base_url)
+    let mut deepseek_models: Vec<(String, String, String, Option<String>)> = Vec::new(); // (virtual, api_key, model, base_url)
                                                                                          // (virtual_name, provider_model, project_id, location, credentials_path)
     let mut vertex_models: Vec<(String, String, String, String, Option<String>)> = Vec::new();
 
@@ -317,6 +319,15 @@ async fn build_providers(
                         deployment.base_url.clone(),
                     ));
                     Some(("moonshot".to_string(), deployment.model.clone()))
+                }
+                "deepseek" => {
+                    deepseek_models.push((
+                        model_cfg.name.clone(),
+                        api_key,
+                        deployment.model.clone(),
+                        deployment.base_url.clone(),
+                    ));
+                    Some(("deepseek".to_string(), deployment.model.clone()))
                 }
                 "vertex-ai" => {
                     let project_id = deployment.project_id.clone().unwrap_or_default();
@@ -488,6 +499,32 @@ async fn build_providers(
                 Some(url_key)
             };
             providers.push(Box::new(MoonshotProvider::new(
+                api_key,
+                base_url,
+                model_names,
+            )));
+        }
+    }
+
+    // Create one DeepSeek provider per unique (api_key, base_url) pair.
+    if !deepseek_models.is_empty() {
+        let mut by_key: std::collections::HashMap<(String, String), Vec<String>> =
+            std::collections::HashMap::new();
+        for (virtual_name, api_key, _model, base_url) in &deepseek_models {
+            let url_key = base_url.clone().unwrap_or_default();
+            by_key
+                .entry((api_key.clone(), url_key))
+                .or_default()
+                .push(virtual_name.clone());
+        }
+
+        for ((api_key, url_key), model_names) in by_key {
+            let base_url = if url_key.is_empty() {
+                None
+            } else {
+                Some(url_key)
+            };
+            providers.push(Box::new(DeepSeekProvider::new(
                 api_key,
                 base_url,
                 model_names,
