@@ -348,7 +348,11 @@ mod tests {
     use super::*;
 
     fn make_provider() -> MiniMaxProvider {
-        MiniMaxProvider::new("test-key".to_string(), None, vec!["minimax-text-01".to_string()])
+        MiniMaxProvider::new(
+            "test-key".to_string(),
+            None,
+            vec!["minimax-text-01".to_string()],
+        )
     }
 
     // ── Construction and config ───────────────────────────────────────────────

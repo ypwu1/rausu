@@ -22,8 +22,8 @@ use tower::ServiceExt;
 
 use rausu::providers::{Capability, Provider, ProviderError};
 use rausu::schema::chat::{
-    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, Choice, ChunkChoice,
-    Delta, Message, ModelInfo, Usage,
+    ChatCompletionChunk, ChatCompletionRequest, ChatCompletionResponse, Choice, ChunkChoice, Delta,
+    Message, ModelInfo, Usage,
 };
 use rausu::server::AppState;
 
@@ -283,11 +283,7 @@ async fn test_openrouter_chat_non_stream() {
         vec![Box::new(StubOpenRouterProvider {
             model_names: vec!["or-gpt4o".to_string()],
         })],
-        vec![registry_entry(
-            "or-gpt4o",
-            "openrouter",
-            "openai/gpt-4o",
-        )],
+        vec![registry_entry("or-gpt4o", "openrouter", "openai/gpt-4o")],
     );
     let resp = post_json(
         app,
@@ -313,11 +309,7 @@ async fn test_openrouter_chat_stream() {
         vec![Box::new(StubOpenRouterProvider {
             model_names: vec!["or-gpt4o".to_string()],
         })],
-        vec![registry_entry(
-            "or-gpt4o",
-            "openrouter",
-            "openai/gpt-4o",
-        )],
+        vec![registry_entry("or-gpt4o", "openrouter", "openai/gpt-4o")],
     );
     let resp = post_json(
         app,
@@ -350,11 +342,7 @@ async fn test_openrouter_responses_api() {
         vec![Box::new(StubOpenRouterProvider {
             model_names: vec!["or-gpt4o".to_string()],
         })],
-        vec![registry_entry(
-            "or-gpt4o",
-            "openrouter",
-            "openai/gpt-4o",
-        )],
+        vec![registry_entry("or-gpt4o", "openrouter", "openai/gpt-4o")],
     );
     let resp = post_json(
         app,
@@ -372,11 +360,7 @@ async fn test_openrouter_responses_api() {
 async fn test_openrouter_invalid_auth() {
     let app = make_chat_app(
         vec![Box::new(AuthErrorProvider)],
-        vec![registry_entry(
-            "or-gpt4o",
-            "openrouter",
-            "openai/gpt-4o",
-        )],
+        vec![registry_entry("or-gpt4o", "openrouter", "openai/gpt-4o")],
     );
     let resp = post_json(
         app,
@@ -433,7 +417,10 @@ async fn test_openrouter_unsupported_capability_failover() {
     assert_eq!(resp.status(), 200);
 
     let body = body_json(resp).await;
-    assert_eq!(body["choices"][0]["message"]["content"], "Hello from OpenRouter!");
+    assert_eq!(
+        body["choices"][0]["message"]["content"],
+        "Hello from OpenRouter!"
+    );
 }
 
 #[tokio::test]
@@ -465,11 +452,7 @@ async fn test_openrouter_tools_passthrough() {
         vec![Box::new(StubOpenRouterProvider {
             model_names: vec!["or-gpt4o".to_string()],
         })],
-        vec![registry_entry(
-            "or-gpt4o",
-            "openrouter",
-            "openai/gpt-4o",
-        )],
+        vec![registry_entry("or-gpt4o", "openrouter", "openai/gpt-4o")],
     );
     let resp = post_json(
         app,
@@ -493,11 +476,7 @@ async fn test_openrouter_response_format_passthrough() {
         vec![Box::new(StubOpenRouterProvider {
             model_names: vec!["or-gpt4o".to_string()],
         })],
-        vec![registry_entry(
-            "or-gpt4o",
-            "openrouter",
-            "openai/gpt-4o",
-        )],
+        vec![registry_entry("or-gpt4o", "openrouter", "openai/gpt-4o")],
     );
     let resp = post_json(
         app,
@@ -555,8 +534,7 @@ impl Provider for CapabilityStubProvider {
     ) -> Result<ChatCompletionResponse, ProviderError> {
         // Record what we received for verification
         if let Some(tools) = &req.tools {
-            *self.received_tools.lock().unwrap() =
-                Some(serde_json::to_value(tools).unwrap());
+            *self.received_tools.lock().unwrap() = Some(serde_json::to_value(tools).unwrap());
         }
         if let Some(fmt) = &req.response_format {
             *self.received_response_format.lock().unwrap() = Some(fmt.clone());
@@ -618,9 +596,7 @@ impl Provider for CapabilityStubProvider {
         let http_resp = http::Response::builder()
             .status(200)
             .header("content-type", "application/json")
-            .body(bytes::Bytes::from(
-                r#"{"type":"message","content":[]}"#,
-            ))
+            .body(bytes::Bytes::from(r#"{"type":"message","content":[]}"#))
             .unwrap();
         Ok(reqwest::Response::from(http_resp))
     }
@@ -677,16 +653,17 @@ async fn test_capability_prefilter_tools_unsupported_returns_422() {
         }"#,
     )
     .await;
-    assert_eq!(resp.status(), 422, "expected 422 for unsupported capability");
+    assert_eq!(
+        resp.status(),
+        422,
+        "expected 422 for unsupported capability"
+    );
 
     let body = body_json(resp).await;
     assert_eq!(body["error"]["type"], "unsupported_capability");
     assert_eq!(body["error"]["code"], "unsupported_capability");
     assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("tools"),
+        body["error"]["message"].as_str().unwrap().contains("tools"),
         "error message should name the missing capability"
     );
 }
@@ -715,12 +692,10 @@ async fn test_capability_prefilter_response_format_unsupported_returns_422() {
 
     let body = body_json(resp).await;
     assert_eq!(body["error"]["type"], "unsupported_capability");
-    assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("response_format"),
-    );
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("response_format"),);
 }
 
 #[tokio::test]
@@ -750,7 +725,10 @@ async fn test_capability_prefilter_both_tools_and_format_unsupported() {
     assert_eq!(body["error"]["type"], "unsupported_capability");
     let msg = body["error"]["message"].as_str().unwrap();
     assert!(msg.contains("tools"), "should mention tools");
-    assert!(msg.contains("response_format"), "should mention response_format");
+    assert!(
+        msg.contains("response_format"),
+        "should mention response_format"
+    );
 }
 
 // ── Capability-based failover ──────────────────────────────────────────────
@@ -856,7 +834,10 @@ async fn test_no_silent_tools_stripping() {
     assert_eq!(resp.status(), 200);
 
     let captured = tools_capture.lock().unwrap();
-    assert!(captured.is_some(), "tools should have been passed to provider");
+    assert!(
+        captured.is_some(),
+        "tools should have been passed to provider"
+    );
     let tools_val = captured.as_ref().unwrap();
     assert!(tools_val.is_array());
     assert_eq!(tools_val.as_array().unwrap().len(), 1);
@@ -909,22 +890,15 @@ async fn test_responses_capability_prefilter_returns_422() {
         ))],
         vec![registry_entry("m", "no-responses", "m")],
     );
-    let resp = post_json(
-        app,
-        "/v1/responses",
-        r#"{"model": "m", "input": "Hello"}"#,
-    )
-    .await;
+    let resp = post_json(app, "/v1/responses", r#"{"model": "m", "input": "Hello"}"#).await;
     assert_eq!(resp.status(), 422);
 
     let body = body_json(resp).await;
     assert_eq!(body["error"]["type"], "unsupported_capability");
-    assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("responses_api"),
-    );
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("responses_api"),);
 }
 
 #[tokio::test]
@@ -950,12 +924,7 @@ async fn test_responses_capability_failover_to_capable() {
             ],
         )],
     );
-    let resp = post_json(
-        app,
-        "/v1/responses",
-        r#"{"model": "m", "input": "Hello"}"#,
-    )
-    .await;
+    let resp = post_json(app, "/v1/responses", r#"{"model": "m", "input": "Hello"}"#).await;
     assert_eq!(resp.status(), 200);
 }
 
@@ -982,12 +951,10 @@ async fn test_messages_capability_prefilter_returns_422() {
 
     let body = body_json(resp).await;
     assert_eq!(body["error"]["type"], "unsupported_capability");
-    assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("messages_api"),
-    );
+    assert!(body["error"]["message"]
+        .as_str()
+        .unwrap()
+        .contains("messages_api"),);
 }
 
 #[tokio::test]
@@ -1056,17 +1023,11 @@ async fn test_unsupported_capability_error_contract() {
         "message should be a string"
     );
     assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("tools"),
+        body["error"]["message"].as_str().unwrap().contains("tools"),
         "message should name the missing capability"
     );
     assert!(
-        body["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("m"),
+        body["error"]["message"].as_str().unwrap().contains("m"),
         "message should name the model"
     );
 }

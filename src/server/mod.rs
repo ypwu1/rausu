@@ -419,7 +419,11 @@ async fn build_providers(
             } else {
                 Some(url_key)
             };
-            providers.push(Box::new(MiniMaxProvider::new(api_key, base_url, model_names)));
+            providers.push(Box::new(MiniMaxProvider::new(
+                api_key,
+                base_url,
+                model_names,
+            )));
         }
     }
 
