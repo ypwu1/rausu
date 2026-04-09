@@ -26,6 +26,7 @@ const PROVIDER_TYPES: &[&str] = &[
     "anthropic",
     "azure-openai",
     "vertex-ai",
+    "google-ai-studio",
 ];
 
 fn provider_display(p: &str) -> &str {
@@ -38,6 +39,7 @@ fn provider_display(p: &str) -> &str {
         "anthropic" => "Anthropic API (requires API key)",
         "azure-openai" => "Azure OpenAI (requires API key + Azure endpoint)",
         "vertex-ai" => "Vertex AI (requires GCP project)",
+        "google-ai-studio" => "Google AI Studio (requires API key)",
         other => other,
     }
 }
@@ -73,6 +75,12 @@ fn provider_model_suggestions(provider: &str) -> Vec<&'static str> {
         "anthropic" => vec!["claude-opus-4-6", "claude-sonnet-4-6", "claude-haiku-4-5"],
         "azure-openai" => vec!["gpt-4o", "gpt-4o-mini", "o3"],
         "vertex-ai" => vec!["gemini-2.5-pro", "gemini-2.5-flash"],
+        "google-ai-studio" => vec![
+            "gemini-2.5-pro",
+            "gemini-2.5-flash",
+            "gemini-2.0-flash",
+            "gemini-2.0-flash-lite",
+        ],
         _ => vec![],
     }
 }
@@ -496,6 +504,7 @@ fn prompt_provider_deployment(
         "anthropic" => prompt_anthropic_deployment(virtual_name),
         "azure-openai" => prompt_azure_openai_deployment(virtual_name),
         "vertex-ai" => prompt_vertex_deployment(virtual_name),
+        "google-ai-studio" => prompt_google_ai_studio_deployment(virtual_name),
         _ => Ok(None),
     }
 }
@@ -705,6 +714,30 @@ fn prompt_vertex_deployment(
         api_version: None,
         project_id: Some(project_id),
         location: Some(location),
+    }))
+}
+
+fn prompt_google_ai_studio_deployment(
+    virtual_name: &str,
+) -> std::result::Result<Option<ProviderDeployment>, InquireError> {
+    let model = prompt_model_name("google-ai-studio", virtual_name)?;
+    let api_key = Password::new("API key:")
+        .with_display_mode(PasswordDisplayMode::Masked)
+        .without_confirmation()
+        .with_help_message(
+            "Supports ${ENV_VAR} syntax — get a key at https://aistudio.google.com/apikey",
+        )
+        .prompt()?;
+    Ok(Some(ProviderDeployment {
+        provider: "google-ai-studio".to_string(),
+        model,
+        api_key: Some(api_key),
+        base_url: None,
+        token_source: None,
+        credentials_path: None,
+        api_version: None,
+        project_id: None,
+        location: None,
     }))
 }
 

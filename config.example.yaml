@@ -384,3 +384,32 @@ models:
   #       model: "claude-opus-4@20250514"
   #       project_id: "${GCP_PROJECT_ID}"
   #       location: us-east5
+
+  # ── Google AI Studio (API key — OpenAI-compatible) ───────────────────────────
+  # Get an API key at https://aistudio.google.com/apikey
+  # Default base URL: https://generativelanguage.googleapis.com/v1beta/openai
+  # Auth: x-goog-api-key header (NOT Bearer token)
+  #
+  # Note: This provider targets Google AI Studio (individual developer API keys).
+  # For enterprise GCP deployments with project-based auth, use `provider: vertex-ai`.
+  #
+  # Common model IDs: gemini-2.5-pro | gemini-2.5-flash | gemini-2.0-flash | gemini-2.0-flash-lite
+  - name: gemini-2.5-pro-studio
+    providers:
+      - provider: google-ai-studio
+        model: gemini-2.5-pro
+        api_key: "${GOOGLE_AI_STUDIO_API_KEY}"
+
+  - name: gemini-2.0-flash-studio
+    providers:
+      - provider: google-ai-studio
+        model: gemini-2.0-flash
+        api_key: "${GOOGLE_AI_STUDIO_API_KEY}"
+
+  # Optional: use a custom base URL
+  # - name: gemini-custom
+  #   providers:
+  #     - provider: google-ai-studio
+  #       model: gemini-2.5-flash
+  #       api_key: "${GOOGLE_AI_STUDIO_API_KEY}"
+  #       base_url: "https://custom-proxy.example.com/v1beta/openai"

@@ -53,6 +53,7 @@ pub mod chatgpt_subscription;
 pub mod claude_subscription;
 pub mod deepseek;
 pub mod github_copilot;
+pub mod google_ai_studio;
 pub mod minimax;
 pub mod moonshot;
 pub mod openai;

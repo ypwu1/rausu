@@ -31,9 +31,9 @@ use crate::providers::{
     anthropic::AnthropicProvider, azure_openai::AzureOpenAiProvider,
     chatgpt_subscription::ChatGptSubscriptionProvider,
     claude_subscription::ClaudeSubscriptionProvider, deepseek::DeepSeekProvider,
-    github_copilot::GitHubCopilotProvider, minimax::MiniMaxProvider, moonshot::MoonshotProvider,
-    openai::OpenAiProvider, openrouter::OpenRouterProvider, vertex_ai::VertexAiProvider,
-    zai::ZaiProvider, Provider,
+    github_copilot::GitHubCopilotProvider, google_ai_studio::GoogleAiStudioProvider,
+    minimax::MiniMaxProvider, moonshot::MoonshotProvider, openai::OpenAiProvider,
+    openrouter::OpenRouterProvider, vertex_ai::VertexAiProvider, zai::ZaiProvider, Provider,
 };
 use crate::schema::chat::ModelInfo;
 
@@ -234,7 +234,8 @@ async fn build_providers(
     let mut zai_models: Vec<(String, String, String, Option<String>)> = Vec::new(); // (virtual, api_key, model, base_url)
     let mut moonshot_models: Vec<(String, String, String, Option<String>)> = Vec::new(); // (virtual, api_key, model, base_url)
     let mut deepseek_models: Vec<(String, String, String, Option<String>)> = Vec::new(); // (virtual, api_key, model, base_url)
-                                                                                         // (virtual, api_key, model, base_url, api_version)
+    let mut google_ai_studio_models: Vec<(String, String, String, Option<String>)> = Vec::new(); // (virtual, api_key, model, base_url)
+                                                                                                 // (virtual, api_key, model, base_url, api_version)
     let mut azure_openai_models: Vec<(String, String, String, Option<String>, Option<String>)> =
         Vec::new();
     // (virtual_name, provider_model, project_id, location, credentials_path)
@@ -332,6 +333,15 @@ async fn build_providers(
                         deployment.base_url.clone(),
                     ));
                     Some(("deepseek".to_string(), deployment.model.clone()))
+                }
+                "google-ai-studio" => {
+                    google_ai_studio_models.push((
+                        model_cfg.name.clone(),
+                        api_key,
+                        deployment.model.clone(),
+                        deployment.base_url.clone(),
+                    ));
+                    Some(("google-ai-studio".to_string(), deployment.model.clone()))
                 }
                 "azure-openai" => {
                     if deployment.base_url.as_ref().is_none_or(|u| u.is_empty()) {
@@ -547,6 +557,32 @@ async fn build_providers(
                 Some(url_key)
             };
             providers.push(Box::new(DeepSeekProvider::new(
+                api_key,
+                base_url,
+                model_names,
+            )));
+        }
+    }
+
+    // Create one Google AI Studio provider per unique (api_key, base_url) pair.
+    if !google_ai_studio_models.is_empty() {
+        let mut by_key: std::collections::HashMap<(String, String), Vec<String>> =
+            std::collections::HashMap::new();
+        for (virtual_name, api_key, _model, base_url) in &google_ai_studio_models {
+            let url_key = base_url.clone().unwrap_or_default();
+            by_key
+                .entry((api_key.clone(), url_key))
+                .or_default()
+                .push(virtual_name.clone());
+        }
+
+        for ((api_key, url_key), model_names) in by_key {
+            let base_url = if url_key.is_empty() {
+                None
+            } else {
+                Some(url_key)
+            };
+            providers.push(Box::new(GoogleAiStudioProvider::new(
                 api_key,
                 base_url,
                 model_names,

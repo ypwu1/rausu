@@ -16,6 +16,7 @@ pub const VALID_PROVIDERS: &[&str] = &[
     "github-copilot",
     "azure-openai",
     "vertex-ai",
+    "google-ai-studio",
 ];
 
 /// Valid token sources for subscription-based providers.
@@ -204,7 +205,7 @@ fn validate_deployment(
 
     // Provider-specific checks
     match d.provider.as_str() {
-        "openai" | "openrouter" | "anthropic" => {
+        "openai" | "openrouter" | "anthropic" | "google-ai-studio" => {
             if d.api_key.as_ref().is_none_or(|k| k.is_empty()) {
                 result.push_warning(&ctx, "no api_key configured");
             }
