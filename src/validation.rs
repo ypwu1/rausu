@@ -17,6 +17,7 @@ pub const VALID_PROVIDERS: &[&str] = &[
     "azure-openai",
     "vertex-ai",
     "google-ai-studio",
+    "bedrock",
 ];
 
 /// Valid token sources for subscription-based providers.
@@ -226,6 +227,11 @@ fn validate_deployment(
                 result.push_error(&ctx, "project_id is required");
             }
         }
+        "bedrock" => {
+            if d.region.as_ref().is_none_or(|r| r.is_empty()) {
+                result.push_error(&ctx, "region is required for bedrock (e.g. us-east-1)");
+            }
+        }
         "claude-subscription" => {
             if let Some(ts) = &d.token_source {
                 if !VALID_TOKEN_SOURCES_CLAUDE.contains(&ts.as_str()) {
@@ -295,6 +301,7 @@ mod tests {
             api_version: None,
             project_id: None,
             location: None,
+            region: None,
         }
     }
 
@@ -410,6 +417,7 @@ mod tests {
                 api_version: None,
                 project_id: None,
                 location: None,
+                region: None,
             }],
         }]);
         let result = validate_config(&config);
@@ -435,6 +443,7 @@ mod tests {
                 api_version: None,
                 project_id: None,
                 location: None,
+                region: None,
             }],
         }]);
         let result = validate_config(&config);
@@ -460,6 +469,7 @@ mod tests {
                 api_version: None,
                 project_id: None,
                 location: None,
+                region: None,
             }],
         }]);
         let result = validate_config(&config);
@@ -504,6 +514,7 @@ mod tests {
                 api_version: None,
                 project_id: None,
                 location: None,
+                region: None,
             }],
         }]);
         let result = validate_config(&config);
@@ -555,6 +566,7 @@ mod tests {
                     api_version: None,
                     project_id: None,
                     location: None,
+                    region: None,
                 }],
             }]);
             let result = validate_config(&config);
@@ -563,5 +575,53 @@ mod tests {
                 "token_source '{ts}' should be valid for claude-subscription"
             );
         }
+    }
+
+    #[test]
+    fn test_bedrock_missing_region() {
+        let config = minimal_config(vec![ModelConfig {
+            name: "claude-bedrock".to_string(),
+            aliases: None,
+            providers: vec![ProviderDeployment {
+                provider: "bedrock".to_string(),
+                model: "anthropic.claude-3-5-sonnet-20241022-v2:0".to_string(),
+                api_key: None,
+                base_url: None,
+                token_source: None,
+                credentials_path: None,
+                api_version: None,
+                project_id: None,
+                location: None,
+                region: None,
+            }],
+        }]);
+        let result = validate_config(&config);
+        assert!(result.has_errors());
+        assert!(result
+            .errors()
+            .iter()
+            .any(|i| i.message.contains("region is required")));
+    }
+
+    #[test]
+    fn test_bedrock_with_region_valid() {
+        let config = minimal_config(vec![ModelConfig {
+            name: "claude-bedrock".to_string(),
+            aliases: None,
+            providers: vec![ProviderDeployment {
+                provider: "bedrock".to_string(),
+                model: "anthropic.claude-3-5-sonnet-20241022-v2:0".to_string(),
+                api_key: None,
+                base_url: None,
+                token_source: None,
+                credentials_path: None,
+                api_version: None,
+                project_id: None,
+                location: None,
+                region: Some("us-east-1".to_string()),
+            }],
+        }]);
+        let result = validate_config(&config);
+        assert!(!result.has_errors());
     }
 }

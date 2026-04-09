@@ -27,6 +27,7 @@ const PROVIDER_TYPES: &[&str] = &[
     "azure-openai",
     "vertex-ai",
     "google-ai-studio",
+    "bedrock",
 ];
 
 fn provider_display(p: &str) -> &str {
@@ -40,6 +41,7 @@ fn provider_display(p: &str) -> &str {
         "azure-openai" => "Azure OpenAI (requires API key + Azure endpoint)",
         "vertex-ai" => "Vertex AI (requires GCP project)",
         "google-ai-studio" => "Google AI Studio (requires API key)",
+        "bedrock" => "AWS Bedrock (requires AWS credentials + region)",
         other => other,
     }
 }
@@ -80,6 +82,13 @@ fn provider_model_suggestions(provider: &str) -> Vec<&'static str> {
             "gemini-2.5-flash",
             "gemini-2.0-flash",
             "gemini-2.0-flash-lite",
+        ],
+        "bedrock" => vec![
+            "anthropic.claude-3-5-sonnet-20241022-v2:0",
+            "anthropic.claude-3-5-haiku-20241022-v1:0",
+            "amazon.nova-pro-v1:0",
+            "amazon.nova-lite-v1:0",
+            "meta.llama3-1-70b-instruct-v1:0",
         ],
         _ => vec![],
     }
@@ -505,6 +514,7 @@ fn prompt_provider_deployment(
         "azure-openai" => prompt_azure_openai_deployment(virtual_name),
         "vertex-ai" => prompt_vertex_deployment(virtual_name),
         "google-ai-studio" => prompt_google_ai_studio_deployment(virtual_name),
+        "bedrock" => prompt_bedrock_deployment(virtual_name),
         _ => Ok(None),
     }
 }
@@ -545,6 +555,7 @@ fn prompt_copilot_deployment(
         api_version: None,
         project_id: None,
         location: None,
+        region: None,
     }))
 }
 
@@ -564,6 +575,7 @@ fn prompt_chatgpt_deployment(
         api_version: None,
         project_id: None,
         location: None,
+        region: None,
     }))
 }
 
@@ -583,6 +595,7 @@ fn prompt_claude_sub_deployment(
         api_version: None,
         project_id: None,
         location: None,
+        region: None,
     }))
 }
 
@@ -613,6 +626,7 @@ fn prompt_openai_deployment(
         api_version: None,
         project_id: None,
         location: None,
+        region: None,
     }))
 }
 
@@ -635,6 +649,7 @@ fn prompt_openrouter_deployment(
         api_version: None,
         project_id: None,
         location: None,
+        region: None,
     }))
 }
 
@@ -657,6 +672,7 @@ fn prompt_anthropic_deployment(
         api_version: None,
         project_id: None,
         location: None,
+        region: None,
     }))
 }
 
@@ -689,6 +705,7 @@ fn prompt_azure_openai_deployment(
         api_version,
         project_id: None,
         location: None,
+        region: None,
     }))
 }
 
@@ -714,6 +731,7 @@ fn prompt_vertex_deployment(
         api_version: None,
         project_id: Some(project_id),
         location: Some(location),
+        region: None,
     }))
 }
 
@@ -738,6 +756,29 @@ fn prompt_google_ai_studio_deployment(
         api_version: None,
         project_id: None,
         location: None,
+        region: None,
+    }))
+}
+
+fn prompt_bedrock_deployment(
+    virtual_name: &str,
+) -> std::result::Result<Option<ProviderDeployment>, InquireError> {
+    let model = prompt_model_name("bedrock", virtual_name)?;
+    let region = Text::new("AWS region:")
+        .with_default("us-east-1")
+        .with_help_message("e.g. us-east-1, us-west-2, eu-west-1, ap-northeast-1")
+        .prompt()?;
+    Ok(Some(ProviderDeployment {
+        provider: "bedrock".to_string(),
+        model,
+        api_key: None,
+        base_url: None,
+        token_source: None,
+        credentials_path: None,
+        api_version: None,
+        project_id: None,
+        location: None,
+        region: Some(region),
     }))
 }
 
@@ -751,6 +792,9 @@ fn provider_detail(d: &ProviderDeployment) -> String {
     }
     if let Some(pid) = &d.project_id {
         parts.push(format!("project={pid}"));
+    }
+    if let Some(region) = &d.region {
+        parts.push(format!("region={region}"));
     }
     format!("({})", parts.join(", "))
 }
@@ -1267,6 +1311,7 @@ mod tests {
                         api_version: None,
                         project_id: None,
                         location: None,
+                        region: None,
                     }],
                 },
                 ModelConfig {
@@ -1282,6 +1327,7 @@ mod tests {
                         api_version: None,
                         project_id: None,
                         location: None,
+                        region: None,
                     }],
                 },
             ],
@@ -1362,6 +1408,7 @@ mod tests {
                     api_version: None,
                     project_id: Some("my-gcp-project".to_string()),
                     location: Some("us-central1".to_string()),
+                    region: None,
                     credentials_path: Some("/path/to/creds.json".to_string()),
                 }],
             }],
@@ -1434,6 +1481,7 @@ mod tests {
                     api_version: None,
                     project_id: None,
                     location: None,
+                    region: None,
                 }],
             }],
         };
@@ -1461,6 +1509,7 @@ mod tests {
                     api_version: None,
                     project_id: None,
                     location: None,
+                    region: None,
                 }],
             }],
         };
@@ -1488,6 +1537,7 @@ mod tests {
                     api_version: None,
                     project_id: None,
                     location: None,
+                    region: None,
                 }],
             }],
         };
@@ -1524,6 +1574,7 @@ mod tests {
                     api_version: None,
                     project_id: None,
                     location: None,
+                    region: None,
                 }],
             }],
         };
@@ -1559,6 +1610,7 @@ mod tests {
                     api_version: None,
                     project_id: None,
                     location: None,
+                    region: None,
                 }],
             }],
         };
@@ -1593,6 +1645,7 @@ mod tests {
                     api_version: None,
                     project_id: None,
                     location: None,
+                    region: None,
                 }],
             }],
         };
@@ -1622,6 +1675,7 @@ mod tests {
                     api_version: None,
                     project_id: None,
                     location: None,
+                    region: None,
                 }],
             }],
         };
@@ -1655,6 +1709,7 @@ mod tests {
                     api_version: None,
                     project_id: None,
                     location: None,
+                    region: None,
                 }],
             }],
         };
@@ -1690,6 +1745,7 @@ mod tests {
                     api_version: None,
                     project_id: None,
                     location: None,
+                    region: None,
                 }],
             }],
         };
@@ -1795,6 +1851,7 @@ auth:
                         api_version: None,
                         project_id: None,
                         location: None,
+                        region: None,
                     },
                     ProviderDeployment {
                         provider: "github-copilot".to_string(),
@@ -1806,6 +1863,7 @@ auth:
                         api_version: None,
                         project_id: None,
                         location: None,
+                        region: None,
                     },
                 ],
             }],

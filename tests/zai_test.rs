@@ -620,6 +620,7 @@ async fn test_zai_build_providers_registration() {
                 api_version: None,
                 project_id: None,
                 location: None,
+                region: None,
             }],
         }],
     };

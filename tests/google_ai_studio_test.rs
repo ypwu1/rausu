@@ -661,6 +661,7 @@ async fn test_google_ai_studio_build_providers_registration() {
                 api_version: None,
                 project_id: None,
                 location: None,
+                region: None,
             }],
         }],
     };

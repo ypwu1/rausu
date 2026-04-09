@@ -28,7 +28,7 @@ use crate::auth::oauth::{OAuthTokenManager, TokenSource};
 use crate::auth::vertex::VertexTokenManager;
 use crate::config::AppConfig;
 use crate::providers::{
-    anthropic::AnthropicProvider, azure_openai::AzureOpenAiProvider,
+    anthropic::AnthropicProvider, azure_openai::AzureOpenAiProvider, bedrock::BedrockProvider,
     chatgpt_subscription::ChatGptSubscriptionProvider,
     claude_subscription::ClaudeSubscriptionProvider, deepseek::DeepSeekProvider,
     github_copilot::GitHubCopilotProvider, google_ai_studio::GoogleAiStudioProvider,
@@ -240,6 +240,8 @@ async fn build_providers(
         Vec::new();
     // (virtual_name, provider_model, project_id, location, credentials_path)
     let mut vertex_models: Vec<(String, String, String, String, Option<String>)> = Vec::new();
+    // (virtual_name, provider_model, region)
+    let mut bedrock_models: Vec<(String, String, String)> = Vec::new();
 
     for model_cfg in &config.models {
         for deployment in &model_cfg.providers {
@@ -375,6 +377,23 @@ async fn build_providers(
                         deployment.credentials_path.clone(),
                     ));
                     Some(("vertex-ai".to_string(), deployment.model.clone()))
+                }
+                "bedrock" => {
+                    let region = deployment.region.clone().unwrap_or_default();
+                    if region.is_empty() {
+                        tracing::error!(
+                            model = %model_cfg.name,
+                            "bedrock requires region (e.g. us-east-1); skipping"
+                        );
+                        None
+                    } else {
+                        bedrock_models.push((
+                            model_cfg.name.clone(),
+                            deployment.model.clone(),
+                            region,
+                        ));
+                        Some(("bedrock".to_string(), deployment.model.clone()))
+                    }
                 }
                 other => {
                     tracing::warn!(provider = %other, "Unknown provider type; skipping");
@@ -747,6 +766,22 @@ async fn build_providers(
         }
     }
 
+    // Create one BedrockProvider per unique region.
+    if !bedrock_models.is_empty() {
+        let mut by_region: std::collections::HashMap<String, Vec<String>> =
+            std::collections::HashMap::new();
+        for (virtual_name, _model, region) in &bedrock_models {
+            by_region
+                .entry(region.clone())
+                .or_default()
+                .push(virtual_name.clone());
+        }
+
+        for (region, model_names) in by_region {
+            providers.push(Box::new(BedrockProvider::new(region, model_names).await));
+        }
+    }
+
     (providers, model_registry)
 }
 
@@ -801,6 +836,7 @@ mod tests {
             api_version: None,
             project_id: None,
             location: None,
+            region: None,
         }
     }
 
@@ -919,6 +955,7 @@ mod tests {
             api_version: None,
             project_id: None,
             location: None,
+            region: None,
         }
     }
 

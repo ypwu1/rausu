@@ -413,3 +413,37 @@ models:
   #       model: gemini-2.5-flash
   #       api_key: "${GOOGLE_AI_STUDIO_API_KEY}"
   #       base_url: "https://custom-proxy.example.com/v1beta/openai"
+
+  # ── AWS Bedrock (Converse API — SigV4 auth) ─────────────────────────────────
+  # Credentials: standard AWS SDK chain (env vars, ~/.aws/credentials, IAM role)
+  #   - AWS_ACCESS_KEY_ID + AWS_SECRET_ACCESS_KEY env vars
+  #   - ~/.aws/credentials profile
+  #   - EC2/ECS/Lambda IAM role (automatic)
+  # Region is REQUIRED (e.g. us-east-1, us-west-2, eu-west-1, ap-northeast-1)
+  #
+  # Model ID formats:
+  #   Anthropic:  anthropic.claude-3-5-sonnet-20241022-v2:0
+  #   Amazon:     amazon.nova-pro-v1:0, amazon.nova-lite-v1:0
+  #   Meta:       meta.llama3-1-70b-instruct-v1:0
+  #   Mistral:    mistral.mistral-large-2407-v1:0
+  - name: claude-3-5-sonnet-bedrock
+    providers:
+      - provider: bedrock
+        model: anthropic.claude-3-5-sonnet-20241022-v2:0
+        region: us-east-1
+
+  - name: nova-pro
+    providers:
+      - provider: bedrock
+        model: amazon.nova-pro-v1:0
+        region: us-east-1
+
+  # Multi-provider failover: try Bedrock first, fall back to Anthropic API
+  # - name: claude-sonnet-failover
+  #   providers:
+  #     - provider: bedrock
+  #       model: anthropic.claude-3-5-sonnet-20241022-v2:0
+  #       region: us-east-1
+  #     - provider: anthropic
+  #       model: claude-3-5-sonnet-20241022
+  #       api_key: "${ANTHROPIC_API_KEY}"

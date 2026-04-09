@@ -43,6 +43,9 @@ tokio-rustls = "0.26"
 rustls-pemfile = "2"
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1", "http2", "service"] }
+aws-config = { version = "1", features = ["behavior-version-latest"] }
+aws-sdk-bedrockruntime = "1"
+aws-smithy-types = "1"
 
 [dev-dependencies]
 tokio-test = "0.4"

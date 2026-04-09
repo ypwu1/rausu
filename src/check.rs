@@ -443,6 +443,16 @@ fn build_endpoint(d: &ProviderDeployment) -> Option<ProviderEndpoint> {
                 kind: EndpointKind::HttpGet { url },
             })
         }
+        "bedrock" => {
+            let region = d.region.as_deref().unwrap_or("us-east-1");
+            Some(ProviderEndpoint {
+                key: format!("bedrock:{region}"),
+                label: format!("bedrock ({region})"),
+                kind: EndpointKind::HttpGet {
+                    url: format!("https://bedrock-runtime.{region}.amazonaws.com/"),
+                },
+            })
+        }
         _ => None,
     }
 }
@@ -601,6 +611,7 @@ mod tests {
             api_version: None,
             project_id: None,
             location: None,
+            region: None,
         };
         assert_eq!(provider_short_label(&d), "openai");
     }
@@ -617,6 +628,7 @@ mod tests {
             api_version: None,
             project_id: None,
             location: None,
+            region: None,
         };
         assert_eq!(
             provider_short_label(&d),
@@ -636,6 +648,7 @@ mod tests {
             api_version: None,
             project_id: None,
             location: None,
+            region: None,
         };
         assert_eq!(provider_short_label(&d), "anthropic");
     }
@@ -724,6 +737,7 @@ mod tests {
             api_version: None,
             project_id: None,
             location: None,
+            region: None,
         };
         let ep = build_endpoint(&d).unwrap();
         assert_eq!(ep.key, "openai:https://api.openai.com/v1");
@@ -744,6 +758,7 @@ mod tests {
             api_version: None,
             project_id: None,
             location: None,
+            region: None,
         };
         let ep = build_endpoint(&d).unwrap();
         assert_eq!(ep.key, "openai:https://api.deepseek.com/v1");
@@ -761,6 +776,7 @@ mod tests {
             api_version: None,
             project_id: None,
             location: None,
+            region: None,
         };
         let ep = build_endpoint(&d).unwrap();
         assert_eq!(ep.key, "github-copilot");
@@ -779,6 +795,7 @@ mod tests {
             api_version: None,
             project_id: None,
             location: None,
+            region: None,
         };
         let ep = build_endpoint(&d).unwrap();
         assert_eq!(ep.key, "chatgpt-subscription");
@@ -797,6 +814,7 @@ mod tests {
             api_version: None,
             project_id: None,
             location: None,
+            region: None,
         };
         assert!(build_endpoint(&d).is_none());
     }

@@ -151,6 +151,10 @@ pub struct ProviderDeployment {
     pub project_id: Option<String>,
     /// GCP region or `"global"` (required for `vertex-ai`, default `"us-central1"`).
     pub location: Option<String>,
+
+    // ── AWS Bedrock specific ─────────────────────────────────────────────────
+    /// AWS region (required for `bedrock`, e.g. `"us-east-1"`).
+    pub region: Option<String>,
 }
 
 impl AppConfig {

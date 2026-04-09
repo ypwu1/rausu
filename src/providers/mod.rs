@@ -49,6 +49,7 @@ impl Capability {
 
 pub mod anthropic;
 pub mod azure_openai;
+pub mod bedrock;
 pub mod chatgpt_subscription;
 pub mod claude_subscription;
 pub mod deepseek;
