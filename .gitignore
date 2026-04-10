@@ -1,7 +1,6 @@
-
-
-
 # Added by cargo
-
+.idea/
 /target
 .claude/
+.codex/
+AGENTS.md
