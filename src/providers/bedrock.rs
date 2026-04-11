@@ -62,17 +62,17 @@ impl BedrockProvider {
     /// via the standard AWS SDK credential chain: environment variables
     /// (`AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY`), shared credentials file
     /// (`~/.aws/credentials`), or IAM role.
-    pub async fn new(region: String, model_names: Vec<String>) -> Self {
+    pub async fn new(region: String, model_names: Vec<String>) -> Result<Self, ProviderError> {
         let sdk_config = aws_config::defaults(aws_config::BehaviorVersion::latest())
             .region(aws_config::Region::new(region.clone()))
             .load()
             .await;
         let client = aws_sdk_bedrockruntime::Client::new(&sdk_config);
-        Self {
+        Ok(Self {
             client,
             region,
             model_names,
-        }
+        })
     }
 }
 

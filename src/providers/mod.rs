@@ -5,7 +5,7 @@
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use futures::Stream;
+use futures::{Stream, StreamExt};
 use thiserror::Error;
 
 use crate::schema::chat::{
@@ -62,9 +62,38 @@ pub mod openrouter;
 pub mod vertex_ai;
 pub mod zai;
 
+/// Parse an OpenAI-compatible SSE byte stream into a typed chunk stream.
+///
+/// This is the standard SSE->ChatCompletionChunk parser shared by all providers
+/// that speak the OpenAI wire format (data: ... / data: [DONE]).
+pub fn parse_sse_stream(
+    byte_stream: impl Stream<Item = Result<bytes::Bytes, reqwest::Error>> + Send + 'static,
+) -> Pin<Box<dyn Stream<Item = Result<ChatCompletionChunk, ProviderError>> + Send>> {
+    Box::pin(byte_stream.flat_map(|result| {
+        let lines: Vec<Result<ChatCompletionChunk, ProviderError>> = match result {
+            Err(e) => vec![Err(ProviderError::Http(e))],
+            Ok(bytes) => {
+                let text = String::from_utf8_lossy(&bytes).to_string();
+                text.lines()
+                    .filter_map(|line| {
+                        let data = line.trim().strip_prefix("data: ")?;
+                        if data == "[DONE]" {
+                            return None;
+                        }
+                        Some(
+                            serde_json::from_str::<ChatCompletionChunk>(data)
+                                .map_err(ProviderError::Serialisation),
+                        )
+                    })
+                    .collect()
+            }
+        };
+        futures::stream::iter(lines)
+    }))
+}
+
 /// Error type for provider operations.
 #[derive(Debug, Error)]
-#[allow(dead_code)]
 pub enum ProviderError {
     /// HTTP transport error.
     #[error("HTTP error: {0}")]

@@ -4,6 +4,8 @@
 //! Distinguishes **hard errors** (block startup) from **warnings** (report but
 //! continue).
 
+use std::collections::HashSet;
+
 use crate::config::schema::{AppConfig, ModelConfig, ProviderDeployment};
 
 /// Known provider types.
@@ -106,8 +108,8 @@ pub fn validate_config(config: &AppConfig) -> ValidationResult {
         result.push_warning("models", "no models configured");
     }
 
-    let mut seen_names: Vec<String> = Vec::new();
-    let mut seen_aliases: Vec<String> = Vec::new();
+    let mut seen_names: HashSet<String> = HashSet::new();
+    let mut seen_aliases: HashSet<String> = HashSet::new();
 
     for model in &config.models {
         validate_model(model, &mut seen_names, &mut seen_aliases, &mut result);
@@ -123,11 +125,10 @@ pub fn validate_config(config: &AppConfig) -> ValidationResult {
 }
 
 /// Validate a single model entry (also usable from setup for per-model checks).
-#[allow(dead_code)]
 pub fn validate_model_entry(model: &ModelConfig) -> ValidationResult {
     let mut result = ValidationResult::default();
-    let mut seen_names = Vec::new();
-    let mut seen_aliases = Vec::new();
+    let mut seen_names = HashSet::new();
+    let mut seen_aliases = HashSet::new();
     validate_model(model, &mut seen_names, &mut seen_aliases, &mut result);
     result
 }
@@ -142,8 +143,8 @@ fn validate_auth(config: &AppConfig, result: &mut ValidationResult) {
 
 fn validate_model(
     model: &ModelConfig,
-    seen_names: &mut Vec<String>,
-    seen_aliases: &mut Vec<String>,
+    seen_names: &mut HashSet<String>,
+    seen_aliases: &mut HashSet<String>,
     result: &mut ValidationResult,
 ) {
     let ctx = format!("model '{}'", model.name);
@@ -155,10 +156,8 @@ fn validate_model(
     }
 
     // Duplicate model name
-    if seen_names.contains(&model.name) {
+    if !seen_names.insert(model.name.clone()) {
         result.push_error(&ctx, "duplicate model name");
-    } else {
-        seen_names.push(model.name.clone());
     }
 
     // Duplicate aliases
@@ -166,10 +165,8 @@ fn validate_model(
         for alias in aliases {
             if alias.trim().is_empty() {
                 result.push_error(&ctx, "empty alias");
-            } else if seen_names.contains(alias) || seen_aliases.contains(alias) {
+            } else if seen_names.contains(alias) || !seen_aliases.insert(alias.clone()) {
                 result.push_error(&ctx, format!("duplicate alias '{alias}'"));
-            } else {
-                seen_aliases.push(alias.clone());
             }
         }
     }

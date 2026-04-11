@@ -22,7 +22,7 @@
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use reqwest::Client;
 use serde_json::Value;
 use tracing::{debug, error};
@@ -47,16 +47,19 @@ pub struct ZaiProvider {
 
 impl ZaiProvider {
     /// Create a new Z.AI provider instance.
-    pub fn new(api_key: String, base_url: Option<String>, model_names: Vec<String>) -> Self {
-        Self {
+    pub fn new(
+        api_key: String,
+        base_url: Option<String>,
+        model_names: Vec<String>,
+    ) -> Result<Self, ProviderError> {
+        Ok(Self {
             client: Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
-                .build()
-                .expect("failed to build z-ai HTTP client"),
+                .build()?,
             api_key,
             base_url: base_url.unwrap_or_else(|| DEFAULT_BASE_URL.to_string()),
             model_names,
-        }
+        })
     }
 }
 
@@ -129,29 +132,7 @@ impl Provider for ZaiProvider {
         }
 
         let byte_stream = response.bytes_stream();
-        let chunk_stream = byte_stream.flat_map(|result| {
-            let lines: Vec<Result<ChatCompletionChunk, ProviderError>> = match result {
-                Err(e) => vec![Err(ProviderError::Http(e))],
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes).to_string();
-                    text.lines()
-                        .filter_map(|line| {
-                            let data = line.trim().strip_prefix("data: ")?;
-                            if data == "[DONE]" {
-                                return None;
-                            }
-                            Some(
-                                serde_json::from_str::<ChatCompletionChunk>(data)
-                                    .map_err(ProviderError::Serialisation),
-                            )
-                        })
-                        .collect()
-                }
-            };
-            futures::stream::iter(lines)
-        });
-
-        Ok(Box::pin(chunk_stream))
+        Ok(super::parse_sse_stream(byte_stream))
     }
 
     async fn proxy_responses(
@@ -239,6 +220,7 @@ mod tests {
             None,
             vec!["z-ai-1-preview".to_string()],
         )
+        .unwrap()
     }
 
     // ── Construction and config ───────────────────────────────────────────────
@@ -260,7 +242,8 @@ mod tests {
             "key".to_string(),
             Some("https://custom.example.com/v4".to_string()),
             vec![],
-        );
+        )
+        .unwrap();
         assert_eq!(p.base_url, "https://custom.example.com/v4");
     }
 
@@ -297,7 +280,8 @@ mod tests {
             "key".to_string(),
             None,
             vec!["z-ai-1-preview".to_string(), "z-ai-1".to_string()],
-        );
+        )
+        .unwrap();
         let models = p.models();
         assert_eq!(models.len(), 2);
         for m in &models {
@@ -310,7 +294,7 @@ mod tests {
 
     #[test]
     fn test_models_empty() {
-        let p = ZaiProvider::new("key".to_string(), None, vec![]);
+        let p = ZaiProvider::new("key".to_string(), None, vec![]).unwrap();
         assert!(p.models().is_empty());
     }
 

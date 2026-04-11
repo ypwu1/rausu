@@ -91,15 +91,17 @@ pub struct ClaudeSubscriptionProvider {
 
 impl ClaudeSubscriptionProvider {
     /// Create a new provider instance.
-    pub fn new(token_manager: Arc<OAuthTokenManager>, model_names: Vec<String>) -> Self {
-        Self {
+    pub fn new(
+        token_manager: Arc<OAuthTokenManager>,
+        model_names: Vec<String>,
+    ) -> Result<Self, ProviderError> {
+        Ok(Self {
             client: Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
-                .build()
-                .expect("failed to build claude-subscription HTTP client"),
+                .build()?,
             token_manager,
             model_names,
-        }
+        })
     }
 }
 
@@ -677,7 +679,8 @@ mod tests {
     fn test_provider_name() {
         let manager = OAuthTokenManager::new(TokenSource::Auto, None);
         let provider =
-            ClaudeSubscriptionProvider::new(manager, vec!["claude-sonnet-4-20250514".to_string()]);
+            ClaudeSubscriptionProvider::new(manager, vec!["claude-sonnet-4-20250514".to_string()])
+                .unwrap();
         assert_eq!(provider.name(), "claude-subscription");
     }
 
@@ -685,7 +688,8 @@ mod tests {
     fn test_models_owned_by() {
         let manager = OAuthTokenManager::new(TokenSource::Auto, None);
         let provider =
-            ClaudeSubscriptionProvider::new(manager, vec!["claude-sonnet-4-20250514".to_string()]);
+            ClaudeSubscriptionProvider::new(manager, vec!["claude-sonnet-4-20250514".to_string()])
+                .unwrap();
         let models = provider.models();
         assert_eq!(models.len(), 1);
         assert_eq!(models[0].id, "claude-sonnet-4-20250514");

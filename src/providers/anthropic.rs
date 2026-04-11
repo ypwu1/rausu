@@ -38,15 +38,14 @@ pub struct AnthropicProvider {
 
 impl AnthropicProvider {
     /// Create a new Anthropic provider instance.
-    pub fn new(api_key: String, model_names: Vec<String>) -> Self {
-        Self {
+    pub fn new(api_key: String, model_names: Vec<String>) -> Result<Self, ProviderError> {
+        Ok(Self {
             client: Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
-                .build()
-                .expect("failed to build anthropic HTTP client"),
+                .build()?,
             api_key,
             model_names,
-        }
+        })
     }
 }
 

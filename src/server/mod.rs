@@ -34,6 +34,7 @@ use crate::providers::{
     github_copilot::GitHubCopilotProvider, google_ai_studio::GoogleAiStudioProvider,
     minimax::MiniMaxProvider, moonshot::MoonshotProvider, openai::OpenAiProvider,
     openrouter::OpenRouterProvider, vertex_ai::VertexAiProvider, zai::ZaiProvider, Provider,
+    ProviderError,
 };
 use crate::schema::chat::ModelInfo;
 
@@ -70,7 +71,9 @@ impl Server {
 
     /// Build the Axum router and run until shutdown.
     pub async fn run(self) -> Result<()> {
-        let (providers, model_registry) = build_providers(&self.config).await;
+        let (providers, model_registry) = build_providers(&self.config)
+            .await
+            .map_err(|e| anyhow::anyhow!("Failed to initialize providers: {e}"))?;
 
         let state = AppState {
             providers: Arc::new(providers),
@@ -213,10 +216,13 @@ impl Server {
 /// The order follows the config YAML (first = highest priority for failover).
 async fn build_providers(
     config: &AppConfig,
-) -> (
-    Vec<Box<dyn Provider>>,
-    HashMap<String, Vec<(String, String)>>,
-) {
+) -> Result<
+    (
+        Vec<Box<dyn Provider>>,
+        HashMap<String, Vec<(String, String)>>,
+    ),
+    ProviderError,
+> {
     let mut providers: Vec<Box<dyn Provider>> = Vec::new();
     let mut model_registry: HashMap<String, Vec<(String, String)>> = HashMap::new();
 
@@ -453,7 +459,7 @@ async fn build_providers(
                 api_key,
                 base_url,
                 model_names,
-            )));
+            )?));
         }
     }
 
@@ -479,7 +485,7 @@ async fn build_providers(
                 api_key,
                 base_url,
                 model_names,
-            )));
+            )?));
         }
     }
 
@@ -505,7 +511,7 @@ async fn build_providers(
                 api_key,
                 base_url,
                 model_names,
-            )));
+            )?));
         }
     }
 
@@ -527,7 +533,7 @@ async fn build_providers(
             } else {
                 Some(url_key)
             };
-            providers.push(Box::new(ZaiProvider::new(api_key, base_url, model_names)));
+            providers.push(Box::new(ZaiProvider::new(api_key, base_url, model_names)?));
         }
     }
 
@@ -553,7 +559,7 @@ async fn build_providers(
                 api_key,
                 base_url,
                 model_names,
-            )));
+            )?));
         }
     }
 
@@ -579,7 +585,7 @@ async fn build_providers(
                 api_key,
                 base_url,
                 model_names,
-            )));
+            )?));
         }
     }
 
@@ -605,7 +611,7 @@ async fn build_providers(
                 api_key,
                 base_url,
                 model_names,
-            )));
+            )?));
         }
     }
 
@@ -620,7 +626,7 @@ async fn build_providers(
                 deployment_name,
                 api_version,
                 vec![virtual_name],
-            )));
+            )?));
         }
     }
 
@@ -636,7 +642,7 @@ async fn build_providers(
         }
 
         for (api_key, model_names) in by_key {
-            providers.push(Box::new(AnthropicProvider::new(api_key, model_names)));
+            providers.push(Box::new(AnthropicProvider::new(api_key, model_names)?));
         }
     }
 
@@ -668,7 +674,7 @@ async fn build_providers(
             providers.push(Box::new(ClaudeSubscriptionProvider::new(
                 token_manager,
                 model_names,
-            )));
+            )?));
         }
     }
 
@@ -704,7 +710,7 @@ async fn build_providers(
             providers.push(Box::new(ChatGptSubscriptionProvider::new(
                 token_manager,
                 model_names,
-            )));
+            )?));
         }
     }
 
@@ -762,7 +768,7 @@ async fn build_providers(
                 project_id,
                 location,
                 model_names,
-            )));
+            )?));
         }
     }
 
@@ -778,11 +784,11 @@ async fn build_providers(
         }
 
         for (region, model_names) in by_region {
-            providers.push(Box::new(BedrockProvider::new(region, model_names).await));
+            providers.push(Box::new(BedrockProvider::new(region, model_names).await?));
         }
     }
 
-    (providers, model_registry)
+    Ok((providers, model_registry))
 }
 
 /// Graceful shutdown signal handler (SIGTERM or Ctrl-C).
@@ -857,7 +863,7 @@ mod tests {
             providers: vec![stub_deployment("anthropic", "claude-haiku-4-5-20251001")],
         }]);
 
-        let (_, registry) = build_providers(&config).await;
+        let (_, registry) = build_providers(&config).await.unwrap();
 
         let primary = registry
             .get("claude-haiku-4-5")
@@ -887,7 +893,7 @@ mod tests {
             },
         ]);
 
-        let (_, registry) = build_providers(&config).await;
+        let (_, registry) = build_providers(&config).await.unwrap();
 
         // Both primary names present
         assert!(registry.contains_key("model-a"));
@@ -909,7 +915,7 @@ mod tests {
             ],
         }]);
 
-        let (_, registry) = build_providers(&config).await;
+        let (_, registry) = build_providers(&config).await.unwrap();
 
         let entries = registry.get("claude-sonnet").expect("model name missing");
         assert_eq!(entries.len(), 2);
@@ -930,7 +936,7 @@ mod tests {
             ],
         }]);
 
-        let (_, registry) = build_providers(&config).await;
+        let (_, registry) = build_providers(&config).await.unwrap();
 
         let primary = registry.get("claude-sonnet").expect("primary missing");
         let alias = registry.get("sonnet").expect("alias missing");
@@ -979,7 +985,7 @@ mod tests {
             },
         ]);
 
-        let (providers, registry) = build_providers(&config).await;
+        let (providers, registry) = build_providers(&config).await.unwrap();
 
         // Should have 2 separate OpenAI provider instances
         let openai_providers: Vec<_> = providers.iter().filter(|p| p.name() == "openai").collect();
@@ -1010,7 +1016,7 @@ mod tests {
             },
         ]);
 
-        let (providers, _) = build_providers(&config).await;
+        let (providers, _) = build_providers(&config).await.unwrap();
 
         let openai_providers: Vec<_> = providers.iter().filter(|p| p.name() == "openai").collect();
         assert_eq!(
@@ -1040,7 +1046,7 @@ mod tests {
             },
         ]);
 
-        let (providers, _) = build_providers(&config).await;
+        let (providers, _) = build_providers(&config).await.unwrap();
 
         let openai_providers: Vec<_> = providers.iter().filter(|p| p.name() == "openai").collect();
         assert_eq!(

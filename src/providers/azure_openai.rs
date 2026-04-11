@@ -25,7 +25,7 @@
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use reqwest::Client;
 use serde_json::Value;
 use tracing::{debug, error};
@@ -65,19 +65,18 @@ impl AzureOpenAiProvider {
         deployment_name: String,
         api_version: Option<String>,
         model_names: Vec<String>,
-    ) -> Self {
+    ) -> Result<Self, ProviderError> {
         let base_url = base_url.trim_end_matches('/').to_string();
-        Self {
+        Ok(Self {
             client: Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
-                .build()
-                .expect("failed to build azure-openai HTTP client"),
+                .build()?,
             api_key,
             base_url,
             api_version: api_version.unwrap_or_else(|| DEFAULT_API_VERSION.to_string()),
             deployment_name,
             model_names,
-        }
+        })
     }
 
     /// Build the chat completions URL for this Azure deployment.
@@ -92,8 +91,7 @@ impl AzureOpenAiProvider {
     ///
     /// Azure OpenAI determines the model from the deployment name in the URL,
     /// not from the request body. Including it can cause errors on some API versions.
-    fn strip_model_field(body: &Value) -> Value {
-        let mut body = body.clone();
+    fn strip_model_field(mut body: Value) -> Value {
         if let Some(obj) = body.as_object_mut() {
             obj.remove("model");
         }
@@ -121,7 +119,7 @@ impl Provider for AzureOpenAiProvider {
 
         // Serialise, strip model field, then send.
         let body = serde_json::to_value(&req).map_err(ProviderError::Serialisation)?;
-        let body = Self::strip_model_field(&body);
+        let body = Self::strip_model_field(body);
 
         let response = self
             .client
@@ -156,7 +154,7 @@ impl Provider for AzureOpenAiProvider {
         debug!(url = %url, model = %req.model, "Sending streaming request to Azure OpenAI");
 
         let body = serde_json::to_value(&req).map_err(ProviderError::Serialisation)?;
-        let body = Self::strip_model_field(&body);
+        let body = Self::strip_model_field(body);
 
         let response = self
             .client
@@ -177,29 +175,7 @@ impl Provider for AzureOpenAiProvider {
         }
 
         let byte_stream = response.bytes_stream();
-        let chunk_stream = byte_stream.flat_map(|result| {
-            let lines: Vec<Result<ChatCompletionChunk, ProviderError>> = match result {
-                Err(e) => vec![Err(ProviderError::Http(e))],
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes).to_string();
-                    text.lines()
-                        .filter_map(|line| {
-                            let data = line.trim().strip_prefix("data: ")?;
-                            if data == "[DONE]" {
-                                return None;
-                            }
-                            Some(
-                                serde_json::from_str::<ChatCompletionChunk>(data)
-                                    .map_err(ProviderError::Serialisation),
-                            )
-                        })
-                        .collect()
-                }
-            };
-            futures::stream::iter(lines)
-        });
-
-        Ok(Box::pin(chunk_stream))
+        Ok(super::parse_sse_stream(byte_stream))
     }
 
     async fn proxy_responses(
@@ -213,7 +189,7 @@ impl Provider for AzureOpenAiProvider {
         // through Chat Completions, the same strategy used by the openai,
         // deepseek, openrouter, moonshot, and z-ai providers.
         let cc_body = transform::responses_to_chat_completions_request(&body);
-        let cc_body = Self::strip_model_field(&cc_body);
+        let cc_body = Self::strip_model_field(cc_body);
 
         let url = self.chat_completions_url();
         debug!(url = %url, "Sending Responses→CC bridged request via azure-openai");
@@ -290,6 +266,7 @@ mod tests {
             None,
             vec!["gpt-4o".to_string()],
         )
+        .unwrap()
     }
 
     // ── Construction and config ───────────────────────────────────────────────
@@ -313,7 +290,8 @@ mod tests {
             "dep".to_string(),
             Some("2025-01-01-preview".to_string()),
             vec![],
-        );
+        )
+        .unwrap();
         assert_eq!(p.api_version, "2025-01-01-preview");
     }
 
@@ -325,7 +303,8 @@ mod tests {
             "dep".to_string(),
             None,
             vec![],
-        );
+        )
+        .unwrap();
         assert_eq!(p.base_url, "https://my-resource.openai.azure.com");
     }
 
@@ -352,7 +331,8 @@ mod tests {
             "my-deploy".to_string(),
             Some("2025-01-01-preview".to_string()),
             vec![],
-        );
+        )
+        .unwrap();
         assert_eq!(
             p.chat_completions_url(),
             "https://res.openai.azure.com/openai/deployments/my-deploy/chat/completions?api-version=2025-01-01-preview"
@@ -367,7 +347,7 @@ mod tests {
             "model": "gpt-4o",
             "messages": [{"role": "user", "content": "Hi"}]
         });
-        let stripped = AzureOpenAiProvider::strip_model_field(&body);
+        let stripped = AzureOpenAiProvider::strip_model_field(body);
         assert!(stripped.get("model").is_none());
         assert!(stripped.get("messages").is_some());
     }
@@ -375,7 +355,7 @@ mod tests {
     #[test]
     fn test_strip_model_field_no_model() {
         let body = serde_json::json!({"messages": []});
-        let stripped = AzureOpenAiProvider::strip_model_field(&body);
+        let stripped = AzureOpenAiProvider::strip_model_field(body);
         assert!(stripped.get("model").is_none());
         assert!(stripped.get("messages").is_some());
     }
@@ -408,7 +388,8 @@ mod tests {
             "dep".to_string(),
             None,
             vec!["gpt-4o".to_string(), "gpt-4o-mini".to_string()],
-        );
+        )
+        .unwrap();
         let models = p.models();
         assert_eq!(models.len(), 2);
         for m in &models {
@@ -427,7 +408,8 @@ mod tests {
             "dep".to_string(),
             None,
             vec![],
-        );
+        )
+        .unwrap();
         assert!(p.models().is_empty());
     }
 

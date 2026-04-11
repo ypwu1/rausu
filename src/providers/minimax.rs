@@ -30,7 +30,7 @@
 use std::pin::Pin;
 
 use async_trait::async_trait;
-use futures::{Stream, StreamExt};
+use futures::Stream;
 use reqwest::Client;
 use serde_json::Value;
 use tracing::{debug, error};
@@ -63,16 +63,19 @@ impl MiniMaxProvider {
     ///
     /// `api_base` overrides the default `https://api.minimax.io`.  All other
     /// endpoint paths are derived from this root.
-    pub fn new(api_key: String, api_base: Option<String>, model_names: Vec<String>) -> Self {
-        Self {
+    pub fn new(
+        api_key: String,
+        api_base: Option<String>,
+        model_names: Vec<String>,
+    ) -> Result<Self, ProviderError> {
+        Ok(Self {
             client: Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
-                .build()
-                .expect("failed to build minimax HTTP client"),
+                .build()?,
             api_key,
             api_base: api_base.unwrap_or_else(|| DEFAULT_API_BASE.to_string()),
             model_names,
-        }
+        })
     }
 
     /// URL for the OpenAI-compatible chat completions endpoint.
@@ -192,29 +195,7 @@ impl Provider for MiniMaxProvider {
         }
 
         let byte_stream = response.bytes_stream();
-        let chunk_stream = byte_stream.flat_map(|result| {
-            let lines: Vec<Result<ChatCompletionChunk, ProviderError>> = match result {
-                Err(e) => vec![Err(ProviderError::Http(e))],
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes).to_string();
-                    text.lines()
-                        .filter_map(|line| {
-                            let data = line.trim().strip_prefix("data: ")?;
-                            if data == "[DONE]" {
-                                return None;
-                            }
-                            Some(
-                                serde_json::from_str::<ChatCompletionChunk>(data)
-                                    .map_err(ProviderError::Serialisation),
-                            )
-                        })
-                        .collect()
-                }
-            };
-            futures::stream::iter(lines)
-        });
-
-        Ok(Box::pin(chunk_stream))
+        Ok(super::parse_sse_stream(byte_stream))
     }
 
     fn models(&self) -> Vec<ModelInfo> {
@@ -353,6 +334,7 @@ mod tests {
             None,
             vec!["minimax-text-01".to_string()],
         )
+        .unwrap()
     }
 
     // ── Construction and config ───────────────────────────────────────────────
@@ -374,7 +356,8 @@ mod tests {
             "key".to_string(),
             Some("https://custom.example.com".to_string()),
             vec![],
-        );
+        )
+        .unwrap();
         assert_eq!(p.api_base, "https://custom.example.com");
     }
 
@@ -402,7 +385,8 @@ mod tests {
             "key".to_string(),
             Some("https://proxy.example.com".to_string()),
             vec![],
-        );
+        )
+        .unwrap();
         assert_eq!(
             p.openai_chat_url(),
             "https://proxy.example.com/v1/chat/completions"
@@ -436,7 +420,8 @@ mod tests {
             "key".to_string(),
             None,
             vec!["minimax-text-01".to_string(), "abab6.5s-chat".to_string()],
-        );
+        )
+        .unwrap();
         let models = p.models();
         assert_eq!(models.len(), 2);
         for m in &models {
@@ -449,7 +434,7 @@ mod tests {
 
     #[test]
     fn test_models_empty() {
-        let p = MiniMaxProvider::new("key".to_string(), None, vec![]);
+        let p = MiniMaxProvider::new("key".to_string(), None, vec![]).unwrap();
         assert!(p.models().is_empty());
     }
 

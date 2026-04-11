@@ -147,17 +147,16 @@ impl VertexAiProvider {
         project_id: String,
         location: String,
         model_names: Vec<String>,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ProviderError> {
+        Ok(Self {
             client: Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
-                .build()
-                .expect("failed to build Vertex AI HTTP client"),
+                .build()?,
             token_manager,
             project_id,
             location,
             model_names,
-        }
+        })
     }
 
     /// Build the Vertex AI endpoint URL for a given model and action.
@@ -995,6 +994,7 @@ mod tests {
             "us-central1".to_string(),
             vec!["gemini-2.5-pro".to_string()],
         )
+        .unwrap()
     }
 
     #[test]
@@ -1010,7 +1010,8 @@ mod tests {
     #[test]
     fn test_endpoint_url_global() {
         let mgr = VertexTokenManager::new(None);
-        let p = VertexAiProvider::new(mgr, "my-project".to_string(), "global".to_string(), vec![]);
+        let p = VertexAiProvider::new(mgr, "my-project".to_string(), "global".to_string(), vec![])
+            .unwrap();
         let url = p.endpoint_url("gemini-2.5-pro", "generateContent");
         assert_eq!(
             url,
@@ -1111,7 +1112,8 @@ mod tests {
                 "claude-sonnet-4-6".to_string(),
                 "gemini-2.5-pro".to_string(),
             ],
-        );
+        )
+        .unwrap();
         let models = p.models();
         let claude = models.iter().find(|m| m.id == "claude-sonnet-4-6").unwrap();
         let gemini = models.iter().find(|m| m.id == "gemini-2.5-pro").unwrap();
@@ -1129,7 +1131,8 @@ mod tests {
             "my-project".to_string(),
             "us-east5".to_string(),
             vec![],
-        );
+        )
+        .unwrap();
         let url = p.claude_endpoint_url("claude-sonnet-4-6", "rawPredict");
         assert_eq!(
             url,
@@ -1145,7 +1148,8 @@ mod tests {
             "my-project".to_string(),
             "us-east5".to_string(),
             vec![],
-        );
+        )
+        .unwrap();
         let url = p.claude_endpoint_url("claude-sonnet-4-6", "streamRawPredict");
         assert_eq!(
             url,
@@ -1156,7 +1160,8 @@ mod tests {
     #[test]
     fn test_claude_endpoint_url_global() {
         let mgr = VertexTokenManager::new(None);
-        let p = VertexAiProvider::new(mgr, "my-project".to_string(), "global".to_string(), vec![]);
+        let p = VertexAiProvider::new(mgr, "my-project".to_string(), "global".to_string(), vec![])
+            .unwrap();
         let url = p.claude_endpoint_url("claude-haiku-4-5-20251001", "rawPredict");
         assert_eq!(
             url,

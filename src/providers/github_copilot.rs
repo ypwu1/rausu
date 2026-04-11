@@ -28,7 +28,6 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use bytes::Bytes;
 use futures::Stream;
-use futures::StreamExt;
 use tracing::{debug, error};
 use uuid::Uuid;
 
@@ -460,29 +459,7 @@ impl Provider for GitHubCopilotProvider {
         }
 
         let byte_stream = response.bytes_stream();
-        let chunk_stream = byte_stream.flat_map(|result| {
-            let lines: Vec<Result<ChatCompletionChunk, ProviderError>> = match result {
-                Err(e) => vec![Err(ProviderError::Http(e))],
-                Ok(bytes) => {
-                    let text = String::from_utf8_lossy(&bytes).to_string();
-                    text.lines()
-                        .filter_map(|line| {
-                            let data = line.trim().strip_prefix("data: ")?;
-                            if data == "[DONE]" {
-                                return None;
-                            }
-                            Some(
-                                serde_json::from_str::<ChatCompletionChunk>(data)
-                                    .map_err(ProviderError::Serialisation),
-                            )
-                        })
-                        .collect()
-                }
-            };
-            futures::stream::iter(lines)
-        });
-
-        Ok(Box::pin(chunk_stream))
+        Ok(super::parse_sse_stream(byte_stream))
     }
 
     fn models(&self) -> Vec<ModelInfo> {

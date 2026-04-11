@@ -46,6 +46,8 @@
 //! - `gpt-5.3-instant`
 //! - `gpt-5.3-chat-latest`
 
+// Deserialization structs mirror the ChatGPT Responses API wire format exactly.
+// Fields are read by serde even when not directly accessed in Rust code.
 #![allow(dead_code)]
 
 use std::pin::Pin;
@@ -91,16 +93,18 @@ pub struct ChatGptSubscriptionProvider {
 
 impl ChatGptSubscriptionProvider {
     /// Create a new provider instance.
-    pub fn new(token_manager: Arc<ChatGptOAuthTokenManager>, model_names: Vec<String>) -> Self {
-        Self {
+    pub fn new(
+        token_manager: Arc<ChatGptOAuthTokenManager>,
+        model_names: Vec<String>,
+    ) -> Result<Self, ProviderError> {
+        Ok(Self {
             client: Client::builder()
                 .connect_timeout(std::time::Duration::from_secs(10))
-                .build()
-                .expect("failed to build chatgpt-subscription HTTP client"),
+                .build()?,
             token_manager,
             model_names,
             user_agent: build_user_agent(),
-        }
+        })
     }
 }
 
@@ -867,7 +871,8 @@ mod tests {
     #[test]
     fn test_provider_name() {
         let manager = ChatGptOAuthTokenManager::new(ChatGptTokenSource::Auto, None);
-        let provider = ChatGptSubscriptionProvider::new(manager, vec!["gpt-5.4".to_string()]);
+        let provider =
+            ChatGptSubscriptionProvider::new(manager, vec!["gpt-5.4".to_string()]).unwrap();
         assert_eq!(provider.name(), "chatgpt-subscription");
     }
 
@@ -877,7 +882,8 @@ mod tests {
         let provider = ChatGptSubscriptionProvider::new(
             manager,
             vec!["gpt-5.4".to_string(), "gpt-5.4-pro".to_string()],
-        );
+        )
+        .unwrap();
         let models = provider.models();
         assert_eq!(models.len(), 2);
         assert_eq!(models[0].id, "gpt-5.4");
@@ -1091,7 +1097,8 @@ mod tests {
     #[test]
     fn test_provider_coexistence() {
         let cg_manager = ChatGptOAuthTokenManager::new(ChatGptTokenSource::Auto, None);
-        let cg_provider = ChatGptSubscriptionProvider::new(cg_manager, vec!["gpt-5.4".to_string()]);
+        let cg_provider =
+            ChatGptSubscriptionProvider::new(cg_manager, vec!["gpt-5.4".to_string()]).unwrap();
         assert_eq!(cg_provider.name(), "chatgpt-subscription");
 
         // Different name from claude-subscription — no conflict.
