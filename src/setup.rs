@@ -194,10 +194,8 @@ fn editor_loop(config: &mut AppConfig, target: &Path) -> std::result::Result<(),
             "TLS" => edit_tls(config)?,
             "Logging" => edit_logging(config)?,
             "Validate" => run_validation(config),
-            "Save and Exit" => {
-                if save_and_exit(config, target)? == SaveOutcome::SavedAndExit {
-                    return Ok(());
-                }
+            "Save and Exit" if save_and_exit(config, target)? == SaveOutcome::SavedAndExit => {
+                return Ok(());
             }
             "Exit without Saving" => {
                 let confirm = Confirm::new("Discard all changes?")

@@ -809,10 +809,8 @@ pub fn messages_to_responses_request(body: &Value) -> Value {
     // system → instructions
     if let Some(system) = body.get("system") {
         match system {
-            Value::String(s) => {
-                if !s.is_empty() {
-                    req["instructions"] = json!(s);
-                }
+            Value::String(s) if !s.is_empty() => {
+                req["instructions"] = json!(s);
             }
             Value::Array(parts) => {
                 let text = parts

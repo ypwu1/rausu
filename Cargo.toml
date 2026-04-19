@@ -43,8 +43,8 @@ tokio-rustls = "0.26"
 rustls-pemfile = "2"
 hyper = { version = "1", features = ["server", "http1", "http2"] }
 hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1", "http2", "service"] }
-aws-config = { version = "1", features = ["behavior-version-latest"] }
-aws-sdk-bedrockruntime = "1"
+aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio", "credentials-process", "sso"] }
+aws-sdk-bedrockruntime = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-smithy-types = "1"
 
 [dev-dependencies]

@@ -203,10 +203,10 @@ fn validate_deployment(
 
     // Provider-specific checks
     match d.provider.as_str() {
-        "openai" | "openrouter" | "anthropic" | "google-ai-studio" => {
-            if d.api_key.as_ref().is_none_or(|k| k.is_empty()) {
-                result.push_warning(&ctx, "no api_key configured");
-            }
+        "openai" | "openrouter" | "anthropic" | "google-ai-studio"
+            if d.api_key.as_ref().is_none_or(|k| k.is_empty()) =>
+        {
+            result.push_warning(&ctx, "no api_key configured");
         }
         "azure-openai" => {
             if d.api_key.as_ref().is_none_or(|k| k.is_empty()) {
@@ -219,15 +219,11 @@ fn validate_deployment(
                 );
             }
         }
-        "vertex-ai" => {
-            if d.project_id.is_none() {
-                result.push_error(&ctx, "project_id is required");
-            }
+        "vertex-ai" if d.project_id.is_none() => {
+            result.push_error(&ctx, "project_id is required");
         }
-        "bedrock" => {
-            if d.region.as_ref().is_none_or(|r| r.is_empty()) {
-                result.push_error(&ctx, "region is required for bedrock (e.g. us-east-1)");
-            }
+        "bedrock" if d.region.as_ref().is_none_or(|r| r.is_empty()) => {
+            result.push_error(&ctx, "region is required for bedrock (e.g. us-east-1)");
         }
         "claude-subscription" => {
             if let Some(ts) = &d.token_source {
