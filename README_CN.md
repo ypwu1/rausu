@@ -3,11 +3,11 @@
 </p>
 
 <h1 align="center">Rausu</h1>
-<p align="center"><em>ラウス</em></p>
+<p align="center"><em>羅臼</em></p>
 
 <p align="center">
   <a href="./README.md">English</a> &bull;
-  <a href="./README_JA.md">日本語</a>
+  <a href="./README_JP.md">日本語</a>
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
   <a href="#配置">配置</a> &bull;
   <a href="#架构">架构</a> &bull;
   <a href="./README.md">English</a> &bull;
-  <a href="./README_JA.md">日本語</a>
+  <a href="./README_JP.md">日本語</a>
 </p>
 
 <p align="center">

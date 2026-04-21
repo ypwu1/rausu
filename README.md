@@ -7,7 +7,7 @@
 
 <p align="center">
   <a href="./README_CN.md">中文</a> &bull;
-  <a href="./README_JA.md">日本語</a>
+  <a href="./README_JP.md">日本語</a>
 </p>
 
 <p align="center">
@@ -16,7 +16,7 @@
   <a href="#configuration">Configuration</a> &bull;
   <a href="#architecture">Architecture</a> &bull;
   <a href="./README_CN.md">中文</a> &bull;
-  <a href="./README_JA.md">日本語</a>
+  <a href="./README_JP.md">日本語</a>
 </p>
 
 <p align="center">
