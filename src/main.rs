@@ -121,26 +121,18 @@ async fn run_serve(cli_config: Option<&str>) -> Result<()> {
             .context("Config path contains non-UTF-8 characters")?,
     )?;
 
-    // Initialise logging based on config
+    // Initialise logging based on config (with optional OpenTelemetry tracing).
     let log_level = app_config.logging.level.as_deref().unwrap_or("info");
     let use_json = app_config.logging.format.as_deref().unwrap_or("json") == "json";
 
-    if use_json {
-        tracing_subscriber::fmt()
-            .json()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level)),
-            )
-            .init();
-    } else {
-        tracing_subscriber::fmt()
-            .pretty()
-            .with_env_filter(
-                tracing_subscriber::EnvFilter::try_from_default_env()
-                    .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new(log_level)),
-            )
-            .init();
+    let _tracer_guard = rausu::observability::init_tracing(
+        log_level,
+        use_json,
+        app_config.observability.otel.as_ref(),
+    )?;
+
+    if _tracer_guard.is_enabled() {
+        info!("OpenTelemetry tracing enabled");
     }
 
     // ── Banner ──────────────────────────────────────────────────────────────

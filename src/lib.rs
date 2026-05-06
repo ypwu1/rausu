@@ -4,6 +4,7 @@
 
 pub mod auth;
 pub mod config;
+pub mod observability;
 pub mod providers;
 pub mod schema;
 pub mod server;

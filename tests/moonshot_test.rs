@@ -645,6 +645,7 @@ async fn test_moonshot_build_providers_registration() {
         server: ServerConfig::default(),
         logging: LoggingConfig::default(),
         auth: AuthConfig::default(),
+        observability: rausu::config::schema::ObservabilityConfig::default(),
         models: vec![ModelConfig {
             name: "moonshot-v1-8k".to_string(),
             aliases: None,

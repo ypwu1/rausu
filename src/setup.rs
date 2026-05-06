@@ -10,8 +10,8 @@ use uuid::Uuid;
 
 use rausu::config::paths::{default_config_path, resolve_config_path};
 use rausu::config::schema::{
-    AppConfig, AuthConfig, AuthKey, LoggingConfig, ModelConfig, ProviderDeployment, ServerConfig,
-    TlsConfig,
+    AppConfig, AuthConfig, AuthKey, LoggingConfig, ModelConfig, ObservabilityConfig,
+    ProviderDeployment, ServerConfig, TlsConfig,
 };
 use rausu::validation::{self, Severity};
 
@@ -153,6 +153,7 @@ fn load_or_create(target: &Path) -> Result<AppConfig> {
         server: ServerConfig::default(),
         logging: LoggingConfig::default(),
         auth: AuthConfig::default(),
+        observability: ObservabilityConfig::default(),
         models: Vec::new(),
     })
 }
@@ -1295,6 +1296,7 @@ mod tests {
                 mode: "disabled".to_string(),
                 keys: Vec::new(),
             },
+            observability: ObservabilityConfig::default(),
             models: vec![
                 ModelConfig {
                     name: "gpt-4o".to_string(),
@@ -1394,6 +1396,7 @@ mod tests {
             server: ServerConfig::default(),
             logging: LoggingConfig::default(),
             auth: AuthConfig::default(),
+            observability: ObservabilityConfig::default(),
             models: vec![ModelConfig {
                 name: "gemini-pro".to_string(),
                 aliases: None,
@@ -1431,6 +1434,7 @@ mod tests {
                 format: Some("json".to_string()),
             },
             auth: AuthConfig::default(),
+            observability: ObservabilityConfig::default(),
             models: Vec::new(),
         };
         let yaml = generate_yaml(&config);
@@ -1466,6 +1470,7 @@ mod tests {
             server: ServerConfig::default(),
             logging: LoggingConfig::default(),
             auth: AuthConfig::default(),
+            observability: ObservabilityConfig::default(),
             models: vec![ModelConfig {
                 name: "gpt-5".to_string(),
                 aliases: None,
@@ -1494,6 +1499,7 @@ mod tests {
             server: ServerConfig::default(),
             logging: LoggingConfig::default(),
             auth: AuthConfig::default(),
+            observability: ObservabilityConfig::default(),
             models: vec![ModelConfig {
                 name: "deepseek-chat".to_string(),
                 aliases: None,
@@ -1522,6 +1528,7 @@ mod tests {
             server: ServerConfig::default(),
             logging: LoggingConfig::default(),
             auth: AuthConfig::default(),
+            observability: ObservabilityConfig::default(),
             models: vec![ModelConfig {
                 name: "gpt-4o".to_string(),
                 aliases: Some(vec!["gpt-4".to_string(), "gpt4o".to_string()]),
@@ -1559,6 +1566,7 @@ mod tests {
                     key: "${AUTH_TOKEN}".to_string(),
                 }],
             },
+            observability: ObservabilityConfig::default(),
             models: vec![ModelConfig {
                 name: "gpt-4o".to_string(),
                 aliases: None,
@@ -1595,6 +1603,7 @@ mod tests {
             server: ServerConfig::default(),
             logging: LoggingConfig::default(),
             auth: AuthConfig::default(),
+            observability: ObservabilityConfig::default(),
             models: vec![ModelConfig {
                 name: "gpt-4o".to_string(),
                 aliases: None,
@@ -1630,6 +1639,7 @@ mod tests {
             server: ServerConfig::default(),
             logging: LoggingConfig::default(),
             auth: AuthConfig::default(),
+            observability: ObservabilityConfig::default(),
             models: vec![ModelConfig {
                 name: "gpt-4o".to_string(),
                 aliases: None,
@@ -1660,6 +1670,7 @@ mod tests {
             server: ServerConfig::default(),
             logging: LoggingConfig::default(),
             auth: AuthConfig::default(),
+            observability: ObservabilityConfig::default(),
             models: vec![ModelConfig {
                 name: "gpt-4o".to_string(),
                 aliases: None,
@@ -1694,6 +1705,7 @@ mod tests {
                 mode: "static".to_string(),
                 keys: Vec::new(), // Error: static mode requires keys
             },
+            observability: ObservabilityConfig::default(),
             models: vec![ModelConfig {
                 name: "gpt-4o".to_string(),
                 aliases: None,
@@ -1730,6 +1742,7 @@ mod tests {
                 mode: "static".to_string(),
                 keys: Vec::new(), // Error: static mode requires keys
             },
+            observability: ObservabilityConfig::default(),
             models: vec![ModelConfig {
                 name: "gpt-4o".to_string(),
                 aliases: None,
@@ -1835,6 +1848,7 @@ auth:
             server: ServerConfig::default(),
             logging: LoggingConfig::default(),
             auth: AuthConfig::default(),
+            observability: ObservabilityConfig::default(),
             models: vec![ModelConfig {
                 name: "claude-sonnet".to_string(),
                 aliases: None,

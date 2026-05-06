@@ -120,6 +120,11 @@ impl Server {
                 auth_state.clone(),
                 auth_middleware,
             ))
+            // Tracing middleware runs *outside* auth so it captures auth
+            // failures too, but it never records request bodies.
+            .layer(middleware::from_fn(
+                crate::observability::trace_request,
+            ))
             .layer(cors)
             .with_state(state);
 
@@ -851,6 +856,7 @@ mod tests {
             server: ServerConfig::default(),
             logging: LoggingConfig::default(),
             auth: AuthConfig::default(),
+            observability: crate::config::schema::ObservabilityConfig::default(),
             models,
         }
     }
