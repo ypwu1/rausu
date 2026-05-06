@@ -8,7 +8,7 @@ use axum::{
     Json,
 };
 use serde_json::Value;
-use tracing::{error, info, warn};
+use tracing::{error, info, warn, Instrument};
 
 use crate::providers::{is_retryable_status, Capability};
 use crate::schema::error::ErrorResponse;
@@ -98,8 +98,18 @@ pub async fn messages(
         // Replace the virtual model name with the upstream model name before forwarding.
         body["model"] = Value::String(provider_model.clone());
 
+        // Child span for the upstream provider call (Anthropic /v1/messages).
+        // We record only safe metadata — never the request/response body.
+        let upstream_span = tracing::info_span!(
+            "llm_messages",
+            otel.name = "llm_messages",
+            llm.provider = %provider_name,
+            llm.request_model = %provider_model,
+            llm.is_stream = is_stream,
+        );
         let upstream = match provider
             .proxy_messages(body.clone(), is_stream, client_betas.clone())
+            .instrument(upstream_span)
             .await
         {
             Ok(r) => r,

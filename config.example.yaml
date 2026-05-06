@@ -12,6 +12,30 @@ logging:
   level: info        # trace | debug | info | warn | error
   format: pretty     # json (structured) | pretty (human-readable)
 
+# ── Observability (OpenTelemetry tracing) ──────────────────────────────────────
+# Disabled by default.  When enabled, Rausu emits OTLP spans for each inbound
+# request and each upstream provider call.  Spans carry only safe metadata —
+# never prompt or response bodies.
+#
+# Environment overrides (highest priority):
+#   RAUSU_OTEL_ENABLED       — true | false
+#   RAUSU_OTEL_EXPORTER      — otlp_http (only option supported today)
+#   RAUSU_OTEL_ENDPOINT      — e.g. http://localhost:4318/v1/traces
+#   RAUSU_OTEL_SERVICE_NAME  — defaults to "rausu"
+#   RAUSU_OTEL_HEADERS       — comma-separated k=v pairs
+# Standard OTel env vars are also honoured: OTEL_EXPORTER_OTLP_ENDPOINT,
+# OTEL_EXPORTER_OTLP_TRACES_ENDPOINT, OTEL_SERVICE_NAME,
+# OTEL_EXPORTER_OTLP_HEADERS, OTEL_TRACES_EXPORTER, OTEL_SDK_DISABLED.
+#
+# observability:
+#   otel:
+#     enabled: false
+#     exporter: otlp_http
+#     endpoint: "http://localhost:4318/v1/traces"
+#     service_name: rausu
+#     headers:
+#       # api-key: "${HONEYCOMB_API_KEY}"
+
 # ── Authentication ─────────────────────────────────────────────────────────────
 # mode: disabled (default) — no auth, suitable for local-only (127.0.0.1) use.
 # mode: static           — clients must send Authorization: Bearer <key>.

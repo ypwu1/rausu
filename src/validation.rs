@@ -279,6 +279,7 @@ mod tests {
             server: ServerConfig::default(),
             logging: LoggingConfig::default(),
             auth: AuthConfig::default(),
+            observability: ObservabilityConfig::default(),
             models,
         }
     }

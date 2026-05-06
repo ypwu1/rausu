@@ -666,6 +666,7 @@ mod tests {
             server: ServerConfig::default(),
             logging: LoggingConfig::default(),
             auth: AuthConfig::default(),
+            observability: rausu::config::schema::ObservabilityConfig::default(),
             models: vec![],
         };
         assert_eq!(auth_display(&cfg, &c), "disabled");
@@ -696,6 +697,7 @@ mod tests {
                     },
                 ],
             },
+            observability: rausu::config::schema::ObservabilityConfig::default(),
             models: vec![],
         };
         assert_eq!(auth_display(&cfg, &c), "static (2 keys)");
@@ -720,6 +722,7 @@ mod tests {
                     key: "k1".to_string(),
                 }],
             },
+            observability: rausu::config::schema::ObservabilityConfig::default(),
             models: vec![],
         };
         assert_eq!(auth_display(&cfg, &c), "static (1 key)");

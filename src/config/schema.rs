@@ -16,6 +16,9 @@ pub struct AppConfig {
     /// Authentication settings.
     #[serde(default)]
     pub auth: AuthConfig,
+    /// Observability (tracing, metrics) settings.
+    #[serde(default)]
+    pub observability: ObservabilityConfig,
     /// Model routing configuration.
     #[serde(default)]
     pub models: Vec<ModelConfig>,
@@ -72,6 +75,37 @@ pub struct LoggingConfig {
     pub level: Option<String>,
     /// Log format: json | pretty (default: json).
     pub format: Option<String>,
+}
+
+/// Observability configuration (tracing).
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct ObservabilityConfig {
+    /// OpenTelemetry tracing settings.
+    #[serde(default)]
+    pub otel: Option<OtelConfig>,
+}
+
+/// OpenTelemetry exporter configuration.
+///
+/// All fields are optional and can be overridden at runtime by environment
+/// variables.  See `docs/OBSERVABILITY.md` for the full list.
+#[derive(Debug, Clone, Deserialize, Serialize, Default)]
+pub struct OtelConfig {
+    /// Master switch — when `false` (default) no spans are exported.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Exporter type.  Currently only `otlp_http` is supported.
+    pub exporter: Option<String>,
+    /// OTLP endpoint URL (e.g. `http://localhost:4318/v1/traces`).
+    pub endpoint: Option<String>,
+    /// Logical service name reported in spans (default: `rausu`).
+    pub service_name: Option<String>,
+    /// Static headers attached to every OTLP request (e.g. auth tokens).
+    ///
+    /// `BTreeMap` is used so that test snapshots and config dumps are
+    /// deterministic.
+    #[serde(default)]
+    pub headers: std::collections::BTreeMap<String, String>,
 }
 
 /// Authentication configuration.
@@ -299,6 +333,7 @@ mod tests {
                     key: "${RAUSU_TEST_AUTH_KEY}".to_string(),
                 }],
             },
+            observability: ObservabilityConfig::default(),
             models: vec![],
         };
         // Simulate the interpolation that load() performs

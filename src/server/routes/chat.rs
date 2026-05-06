@@ -7,7 +7,7 @@ use axum::{
     Json,
 };
 use futures::StreamExt;
-use tracing::{error, info, instrument, warn};
+use tracing::{error, info, instrument, warn, Instrument};
 
 use crate::providers::{Capability, ProviderError};
 use crate::schema::chat::ChatCompletionRequest;
@@ -106,10 +106,23 @@ pub async fn chat_completions(
         let mut upstream_req = req.clone();
         upstream_req.model = provider_model.clone();
 
+        // Child span tracking the upstream provider call.  We deliberately
+        // record only safe metadata — never the request/response body.
+        let upstream_span = tracing::info_span!(
+            "llm_request",
+            otel.name = "llm_request",
+            llm.provider = %provider_name,
+            llm.request_model = %provider_model,
+            llm.is_stream = is_stream,
+        );
         let result = if is_stream {
-            handle_streaming(provider.as_ref(), upstream_req).await
+            handle_streaming(provider.as_ref(), upstream_req)
+                .instrument(upstream_span)
+                .await
         } else {
-            handle_non_streaming(provider.as_ref(), upstream_req).await
+            handle_non_streaming(provider.as_ref(), upstream_req)
+                .instrument(upstream_span)
+                .await
         };
 
         match result {

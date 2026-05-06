@@ -648,6 +648,7 @@ async fn test_google_ai_studio_build_providers_registration() {
         server: ServerConfig::default(),
         logging: LoggingConfig::default(),
         auth: AuthConfig::default(),
+        observability: rausu::config::schema::ObservabilityConfig::default(),
         models: vec![ModelConfig {
             name: "gemini-2.0-flash".to_string(),
             aliases: None,

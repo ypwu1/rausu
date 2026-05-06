@@ -46,6 +46,10 @@ hyper-util = { version = "0.1", features = ["tokio", "server-auto", "http1", "ht
 aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "default-https-client", "rt-tokio", "credentials-process", "sso"] }
 aws-sdk-bedrockruntime = { version = "1", default-features = false, features = ["default-https-client", "rt-tokio"] }
 aws-smithy-types = "1"
+opentelemetry = { version = "0.31", default-features = false, features = ["trace"] }
+opentelemetry_sdk = { version = "0.31", default-features = false, features = ["trace", "rt-tokio"] }
+opentelemetry-otlp = { version = "0.31", default-features = false, features = ["http-proto", "reqwest-client", "trace"] }
+tracing-opentelemetry = { version = "0.32", default-features = false, features = ["tracing-log"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

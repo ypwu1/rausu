@@ -607,6 +607,7 @@ async fn test_zai_build_providers_registration() {
         server: ServerConfig::default(),
         logging: LoggingConfig::default(),
         auth: AuthConfig::default(),
+        observability: rausu::config::schema::ObservabilityConfig::default(),
         models: vec![ModelConfig {
             name: "z-ai-1-preview".to_string(),
             aliases: None,
